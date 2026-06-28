@@ -23,6 +23,7 @@
   "delta": {
     "case_deltas": [
       {
+        "eval_set_id": "promptiter-regression-validation",
         "case_id": "validation_no_effect",
         "type": "unchanged",
         "baseline_score": 0,
@@ -32,6 +33,7 @@
         "candidate_status": "failed"
       },
       {
+        "eval_set_id": "promptiter-regression-validation",
         "case_id": "validation_overfit_guard",
         "type": "newly_failed",
         "baseline_score": 1,
@@ -41,6 +43,7 @@
         "candidate_status": "failed"
       },
       {
+        "eval_set_id": "promptiter-regression-validation",
         "case_id": "validation_prompt_fixable",
         "type": "newly_passed",
         "baseline_score": 0,
@@ -400,6 +403,7 @@
       },
       "case_deltas": [
         {
+          "eval_set_id": "promptiter-regression-validation",
           "case_id": "validation_no_effect",
           "type": "unchanged",
           "baseline_score": 0,
@@ -409,6 +413,7 @@
           "candidate_status": "failed"
         },
         {
+          "eval_set_id": "promptiter-regression-validation",
           "case_id": "validation_overfit_guard",
           "type": "newly_failed",
           "baseline_score": 1,
@@ -418,6 +423,7 @@
           "candidate_status": "failed"
         },
         {
+          "eval_set_id": "promptiter-regression-validation",
           "case_id": "validation_prompt_fixable",
           "type": "newly_passed",
           "baseline_score": 0,

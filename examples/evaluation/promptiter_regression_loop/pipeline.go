@@ -155,22 +155,6 @@ func profilePrompt(profile *promptiter.Profile) string {
 	return ""
 }
 
-func sampleBaselineValidation() *promptiterengine.EvaluationResult {
-	return evalResultFromCases("promptiter-regression-validation", []promptiterengine.CaseResult{
-		sampleCase("validation_prompt_fixable", 0, status.EvalStatusFailed, "final_response_exact_json", "final response mismatch"),
-		sampleCase("validation_no_effect", 0, status.EvalStatusFailed, "tool_trajectory_avg_score", "arguments mismatch: expected V-200"),
-		sampleCase("validation_overfit_guard", 1, status.EvalStatusPassed, "final_response_exact_json", ""),
-	})
-}
-
-func sampleCandidateValidation() *promptiterengine.EvaluationResult {
-	return evalResultFromCases("promptiter-regression-validation", []promptiterengine.CaseResult{
-		sampleCase("validation_prompt_fixable", 1, status.EvalStatusPassed, "final_response_exact_json", ""),
-		sampleCase("validation_no_effect", 0, status.EvalStatusFailed, "tool_trajectory_avg_score", "arguments mismatch: expected V-200"),
-		sampleCase("validation_overfit_guard", 0.6, status.EvalStatusFailed, "final_response_exact_json", "overfit regression"),
-	})
-}
-
 func evalResultFromCases(evalSetID string, cases []promptiterengine.CaseResult) *promptiterengine.EvaluationResult {
 	total := 0.0
 	for _, c := range cases {

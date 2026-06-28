@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"time"
 
@@ -35,12 +36,11 @@ import (
 )
 
 const (
-	regressionAppName         = "promptiter-regression-loop-app"
-	regressionNodeID          = "candidate"
-	regressionSurfaceID       = "candidate#instruction"
-	regressionTrainEvalSetID  = "promptiter-regression-train"
-	regressionValidEvalSetID  = "promptiter-regression-validation"
-	regressionCandidatePrompt = "Always answer with compact JSON using the exact account id, status, and source from tool or cache evidence."
+	regressionAppName        = "promptiter-regression-loop-app"
+	regressionNodeID         = "candidate"
+	regressionSurfaceID      = "candidate#instruction"
+	regressionTrainEvalSetID = "promptiter-regression-train"
+	regressionValidEvalSetID = "promptiter-regression-validation"
 )
 
 type promptIterRunArtifacts struct {
@@ -50,6 +50,10 @@ type promptIterRunArtifacts struct {
 
 func runPromptIter(ctx context.Context, cfg promptIterConfig, configDir string) (*promptIterRunArtifacts, error) {
 	baselinePrompt, err := loadBaselinePrompt(filepath.Join(configDir, "baseline_prompt.txt"))
+	if err != nil {
+		return nil, err
+	}
+	scenario, err := loadRegressionScenario(configDir, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +69,7 @@ func runPromptIter(ctx context.Context, cfg promptIterConfig, configDir string) 
 	engineInstance, err := promptiterengine.New(
 		ctx,
 		&regressionStructureAgent{baselinePrompt: baselinePrompt},
-		newScriptedAgentEvaluator(),
+		newScriptedAgentEvaluator(scenario),
 		&deterministicBackwarder{},
 		&deterministicAggregator{},
 		&deterministicOptimizer{model: optimizerModel},
@@ -212,12 +216,13 @@ func (a *regressionStructureAgent) Export(
 }
 
 type scriptedAgentEvaluator struct {
+	scenario        *regressionScenario
 	mu              sync.Mutex
 	validationCalls int
 }
 
-func newScriptedAgentEvaluator() evaluation.AgentEvaluator {
-	return &scriptedAgentEvaluator{}
+func newScriptedAgentEvaluator(scenario *regressionScenario) evaluation.AgentEvaluator {
+	return &scriptedAgentEvaluator{scenario: scenario}
 }
 
 func (e *scriptedAgentEvaluator) Evaluate(
@@ -227,18 +232,21 @@ func (e *scriptedAgentEvaluator) Evaluate(
 ) (*evaluation.EvaluationResult, error) {
 	_ = ctx
 	_ = opt
+	if e.scenario == nil {
+		return nil, errors.New("regression scenario is nil")
+	}
 	switch evalSetID {
 	case regressionTrainEvalSetID:
-		return genericEvaluationFromEngineResult(sampleTrainEvaluation()), nil
+		return genericEvaluationFromEngineResult(e.scenario.Train), nil
 	case regressionValidEvalSetID:
 		e.mu.Lock()
 		e.validationCalls++
 		call := e.validationCalls
 		e.mu.Unlock()
 		if call == 1 {
-			return genericEvaluationFromEngineResult(sampleBaselineValidation()), nil
+			return genericEvaluationFromEngineResult(e.scenario.BaselineValidation), nil
 		}
-		return genericEvaluationFromEngineResult(sampleCandidateValidation()), nil
+		return genericEvaluationFromEngineResult(e.scenario.CandidateValidation), nil
 	default:
 		return nil, fmt.Errorf("unexpected eval set %q", evalSetID)
 	}
@@ -303,7 +311,9 @@ func (o *deterministicOptimizer) Optimize(
 	if err != nil {
 		return nil, err
 	}
-	patch.SurfaceID = request.Surface.SurfaceID
+	if patch.SurfaceID != request.Surface.SurfaceID {
+		return nil, fmt.Errorf("optimizer patch surface %q does not match requested surface %q", patch.SurfaceID, request.Surface.SurfaceID)
+	}
 	return &optimizer.Result{
 		Patch: patch,
 	}, nil
@@ -344,6 +354,9 @@ func parseOptimizerPatch(responses []*model.Response) (*promptiter.SurfacePatch,
 		return nil, errors.New("optimizer patch response has no patches")
 	}
 	patch := payload.Patches[0]
+	if patch.SurfaceID == "" {
+		return nil, errors.New("optimizer patch surface id is empty")
+	}
 	if patch.Value.Text == "" {
 		return nil, errors.New("optimizer patch text is empty")
 	}
@@ -354,12 +367,205 @@ func parseOptimizerPatch(responses []*model.Response) (*promptiter.SurfacePatch,
 	}, nil
 }
 
-func sampleTrainEvaluation() *promptiterengine.EvaluationResult {
-	return evalResultFromCases(regressionTrainEvalSetID, []promptiterengine.CaseResult{
-		sampleCaseForSet(regressionTrainEvalSetID, "train_prompt_fixable", 0, status.EvalStatusFailed, "final_response_exact_json", "final response mismatch"),
-		sampleCaseForSet(regressionTrainEvalSetID, "train_tool_argument_error", 0, status.EvalStatusFailed, "tool_trajectory_avg_score", "arguments mismatch: expected B-200"),
-		sampleCaseForSet(regressionTrainEvalSetID, "train_already_passed", 1, status.EvalStatusPassed, "final_response_exact_json", ""),
-	})
+type regressionScenario struct {
+	Train               *promptiterengine.EvaluationResult
+	BaselineValidation  *promptiterengine.EvaluationResult
+	CandidateValidation *promptiterengine.EvaluationResult
+}
+
+type regressionMetricNames struct {
+	FinalResponse  string
+	ToolTrajectory string
+}
+
+type scenarioEvalSetFile struct {
+	EvalSetID string               `json:"evalSetId"`
+	EvalCases []regressionEvalCase `json:"evalCases"`
+}
+
+type regressionEvalCase struct {
+	EvalID             string                   `json:"evalId"`
+	Conversation       []regressionConversation `json:"conversation"`
+	ActualConversation []regressionConversation `json:"actualConversation"`
+}
+
+type regressionConversation struct {
+	FinalResponse regressionMessage `json:"finalResponse"`
+	Tools         []regressionTool  `json:"tools"`
+}
+
+type regressionMessage struct {
+	Content string `json:"content"`
+}
+
+type regressionTool struct {
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments"`
+	Result    map[string]any `json:"result"`
+}
+
+func loadRegressionScenario(configDir string, cfg promptIterConfig) (*regressionScenario, error) {
+	metrics, err := loadRegressionMetricNames(filepath.Join(configDir, "metrics.json"))
+	if err != nil {
+		return nil, err
+	}
+	trainSet, err := loadRegressionEvalSet(filepath.Join(configDir, "train.evalset.json"))
+	if err != nil {
+		return nil, err
+	}
+	validationSet, err := loadRegressionEvalSet(filepath.Join(configDir, "validation.evalset.json"))
+	if err != nil {
+		return nil, err
+	}
+	train := buildBaselineEvaluation(trainSet, metrics)
+	baselineValidation := buildBaselineEvaluation(validationSet, metrics)
+	candidateValidation := buildCandidateValidation(validationSet, baselineValidation, metrics, cfg.CriticalCaseIDs)
+	return &regressionScenario{
+		Train:               train,
+		BaselineValidation:  baselineValidation,
+		CandidateValidation: candidateValidation,
+	}, nil
+}
+
+type metricFileEntry struct {
+	MetricName string                     `json:"metricName"`
+	Criterion  map[string]json.RawMessage `json:"criterion"`
+}
+
+func loadRegressionMetricNames(path string) (regressionMetricNames, error) {
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return regressionMetricNames{}, fmt.Errorf("read metrics config: %w", err)
+	}
+	var entries []metricFileEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return regressionMetricNames{}, fmt.Errorf("decode metrics config: %w", err)
+	}
+	var names regressionMetricNames
+	for _, entry := range entries {
+		if _, ok := entry.Criterion["finalResponse"]; ok && names.FinalResponse == "" {
+			names.FinalResponse = entry.MetricName
+		}
+		if _, ok := entry.Criterion["toolTrajectory"]; ok && names.ToolTrajectory == "" {
+			names.ToolTrajectory = entry.MetricName
+		}
+	}
+	if names.FinalResponse == "" || names.ToolTrajectory == "" {
+		return regressionMetricNames{}, errors.New("metrics config must include finalResponse and toolTrajectory metrics")
+	}
+	return names, nil
+}
+
+func loadRegressionEvalSet(path string) (*scenarioEvalSetFile, error) {
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return nil, fmt.Errorf("read evalset config: %w", err)
+	}
+	var evalSet scenarioEvalSetFile
+	if err := json.Unmarshal(data, &evalSet); err != nil {
+		return nil, fmt.Errorf("decode evalset config: %w", err)
+	}
+	if evalSet.EvalSetID == "" {
+		return nil, errors.New("evalset id is empty")
+	}
+	return &evalSet, nil
+}
+
+func buildBaselineEvaluation(evalSet *scenarioEvalSetFile, metrics regressionMetricNames) *promptiterengine.EvaluationResult {
+	cases := make([]promptiterengine.CaseResult, 0, len(evalSet.EvalCases))
+	for _, evalCase := range evalSet.EvalCases {
+		cases = append(cases, baselineCaseResult(evalSet.EvalSetID, evalCase, metrics))
+	}
+	return evalResultFromCases(evalSet.EvalSetID, cases)
+}
+
+func baselineCaseResult(
+	evalSetID string,
+	evalCase regressionEvalCase,
+	metrics regressionMetricNames,
+) promptiterengine.CaseResult {
+	expected, actual := firstConversation(evalCase.Conversation), firstConversation(evalCase.ActualConversation)
+	switch {
+	case !toolsEqual(expected.Tools, actual.Tools):
+		return sampleCaseForSet(evalSetID, evalCase.EvalID, 0, status.EvalStatusFailed, metrics.ToolTrajectory, toolMismatchReason(expected.Tools))
+	case expected.FinalResponse.Content != actual.FinalResponse.Content:
+		return sampleCaseForSet(evalSetID, evalCase.EvalID, 0, status.EvalStatusFailed, metrics.FinalResponse, "final response mismatch")
+	default:
+		return sampleCaseForSet(evalSetID, evalCase.EvalID, 1, status.EvalStatusPassed, metrics.FinalResponse, "")
+	}
+}
+
+func buildCandidateValidation(
+	evalSet *scenarioEvalSetFile,
+	baseline *promptiterengine.EvaluationResult,
+	metrics regressionMetricNames,
+	criticalCaseIDs []string,
+) *promptiterengine.EvaluationResult {
+	critical := make(map[string]struct{}, len(criticalCaseIDs))
+	for _, caseID := range criticalCaseIDs {
+		critical[caseID] = struct{}{}
+	}
+	baselineCases := baselineCaseIndex(baseline)
+	cases := make([]promptiterengine.CaseResult, 0, len(evalSet.EvalCases))
+	for _, evalCase := range evalSet.EvalCases {
+		baselineCase := baselineCases[evalCase.EvalID]
+		baselineStatus := summarizeCaseStatus(baselineCase.Metrics)
+		if _, ok := critical[evalCase.EvalID]; ok && baselineStatus == status.EvalStatusPassed {
+			cases = append(cases, sampleCaseForSet(evalSet.EvalSetID, evalCase.EvalID, 0.6, status.EvalStatusFailed, metrics.FinalResponse, "overfit regression"))
+			continue
+		}
+		if len(baselineCase.Metrics) > 0 && baselineCase.Metrics[0].MetricName == metrics.FinalResponse &&
+			baselineCase.Metrics[0].Status == status.EvalStatusFailed {
+			cases = append(cases, sampleCaseForSet(evalSet.EvalSetID, evalCase.EvalID, 1, status.EvalStatusPassed, metrics.FinalResponse, ""))
+			continue
+		}
+		cases = append(cases, baselineCase)
+	}
+	return evalResultFromCases(evalSet.EvalSetID, cases)
+}
+
+func firstConversation(conversations []regressionConversation) regressionConversation {
+	if len(conversations) == 0 {
+		return regressionConversation{}
+	}
+	return conversations[0]
+}
+
+func toolsEqual(expected, actual []regressionTool) bool {
+	if len(expected) != len(actual) {
+		return false
+	}
+	for i := range expected {
+		if expected[i].Name != actual[i].Name ||
+			!reflect.DeepEqual(expected[i].Arguments, actual[i].Arguments) ||
+			!reflect.DeepEqual(expected[i].Result, actual[i].Result) {
+			return false
+		}
+	}
+	return true
+}
+
+func toolMismatchReason(expected []regressionTool) string {
+	if len(expected) == 0 {
+		return "tool trajectory mismatch"
+	}
+	if accountID, ok := expected[0].Arguments["account_id"].(string); ok && accountID != "" {
+		return "arguments mismatch: expected " + accountID
+	}
+	return "arguments mismatch"
+}
+
+func baselineCaseIndex(result *promptiterengine.EvaluationResult) map[string]promptiterengine.CaseResult {
+	index := make(map[string]promptiterengine.CaseResult)
+	if result == nil {
+		return index
+	}
+	for _, evalSet := range result.EvalSets {
+		for _, c := range evalSet.Cases {
+			index[c.EvalCaseID] = c
+		}
+	}
+	return index
 }
 
 func genericEvaluationFromEngineResult(result *promptiterengine.EvaluationResult) *evaluation.EvaluationResult {

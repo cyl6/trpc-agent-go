@@ -81,6 +81,7 @@ func TestAuditReportBuilderOutputsRequiredJSONAndMarkdownFields(t *testing.T) {
 	assert.Contains(t, string(jsonBytes), `"baseline"`)
 	assert.Contains(t, string(jsonBytes), `"candidate"`)
 	assert.Contains(t, string(jsonBytes), `"case_deltas"`)
+	assert.Contains(t, string(jsonBytes), `"eval_set_id"`)
 	assert.Contains(t, string(jsonBytes), `"case_id"`)
 	assert.Contains(t, string(jsonBytes), `"gate_decision"`)
 	assert.Contains(t, string(jsonBytes), `"accepted"`)
@@ -88,6 +89,7 @@ func TestAuditReportBuilderOutputsRequiredJSONAndMarkdownFields(t *testing.T) {
 	assert.Contains(t, string(jsonBytes), `"cost_latency"`)
 	assert.Contains(t, md, "Optimization Report")
 	assert.Contains(t, md, "critical case regressed")
+	assert.Contains(t, md, "Eval Set")
 	assert.Contains(t, md, "case_1")
 	assert.Contains(t, md, "final_response_mismatch")
 }

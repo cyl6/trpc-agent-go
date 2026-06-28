@@ -15,11 +15,11 @@ Reason: newly failed cases: validation_overfit_guard; regressed critical cases: 
 
 ## Case Delta
 
-| Case | Type | Baseline | Candidate | Delta |
-| --- | --- | ---: | ---: | ---: |
-| validation_no_effect | unchanged | 0.0000 | 0.0000 | 0.0000 |
-| validation_overfit_guard | newly_failed | 1.0000 | 0.6000 | -0.4000 |
-| validation_prompt_fixable | newly_passed | 0.0000 | 1.0000 | 1.0000 |
+| Eval Set | Case | Type | Baseline | Candidate | Delta |
+| --- | --- | --- | ---: | ---: | ---: |
+| promptiter-regression-validation | validation_no_effect | unchanged | 0.0000 | 0.0000 | 0.0000 |
+| promptiter-regression-validation | validation_overfit_guard | newly_failed | 1.0000 | 0.6000 | -0.4000 |
+| promptiter-regression-validation | validation_prompt_fixable | newly_passed | 0.0000 | 1.0000 | 1.0000 |
 
 ## Failure Attribution
 

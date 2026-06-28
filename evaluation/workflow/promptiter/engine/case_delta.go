@@ -33,6 +33,7 @@ const (
 
 // CaseDelta stores the per-case validation difference between baseline and candidate.
 type CaseDelta struct {
+	EvalSetID       string            `json:"eval_set_id"`
 	CaseID          string            `json:"case_id"`
 	Type            CaseDeltaType     `json:"type"`
 	BaselineScore   float64           `json:"baseline_score"`
@@ -44,26 +45,38 @@ type CaseDelta struct {
 
 // CompareCaseDeltas compares validation results case by case.
 func CompareCaseDeltas(baseline, candidate *EvaluationResult) []CaseDelta {
-	baselineByCaseID := indexCasesByCaseID(baseline)
-	candidateByCaseID := indexCasesByCaseID(candidate)
-	caseIDs := make([]string, 0, len(baselineByCaseID))
-	for caseID := range baselineByCaseID {
-		if _, ok := candidateByCaseID[caseID]; ok {
-			caseIDs = append(caseIDs, caseID)
-		}
+	baselineByCaseID := indexCasesByKey(baseline)
+	candidateByCaseID := indexCasesByKey(candidate)
+	caseKeys := make([]caseDeltaKey, 0, len(baselineByCaseID)+len(candidateByCaseID))
+	seen := make(map[caseDeltaKey]struct{}, len(baselineByCaseID)+len(candidateByCaseID))
+	for key := range baselineByCaseID {
+		seen[key] = struct{}{}
+		caseKeys = append(caseKeys, key)
 	}
-	sort.Strings(caseIDs)
+	for key := range candidateByCaseID {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		caseKeys = append(caseKeys, key)
+	}
+	sort.Slice(caseKeys, func(i, j int) bool {
+		if caseKeys[i].evalSetID != caseKeys[j].evalSetID {
+			return caseKeys[i].evalSetID < caseKeys[j].evalSetID
+		}
+		return caseKeys[i].evalCaseID < caseKeys[j].evalCaseID
+	})
 
-	deltas := make([]CaseDelta, 0, len(caseIDs))
-	for _, caseID := range caseIDs {
-		baseCase := baselineByCaseID[caseID]
-		candCase := candidateByCaseID[caseID]
+	deltas := make([]CaseDelta, 0, len(caseKeys))
+	for _, key := range caseKeys {
+		baseCase := baselineByCaseID[key]
+		candCase := candidateByCaseID[key]
 		baseScore := averageMetricScore(baseCase)
 		candScore := averageMetricScore(candCase)
 		baseStatus := caseStatusFromMetrics(baseCase.Metrics)
 		candStatus := caseStatusFromMetrics(candCase.Metrics)
 		delta := CaseDelta{
-			CaseID:          caseID,
+			EvalSetID:       key.evalSetID,
+			CaseID:          key.evalCaseID,
 			BaselineScore:   baseScore,
 			CandidateScore:  candScore,
 			ScoreDelta:      candScore - baseScore,
@@ -87,8 +100,13 @@ func CompareCaseDeltas(baseline, candidate *EvaluationResult) []CaseDelta {
 	return deltas
 }
 
-func indexCasesByCaseID(result *EvaluationResult) map[string]CaseResult {
-	index := make(map[string]CaseResult)
+type caseDeltaKey struct {
+	evalSetID  string
+	evalCaseID string
+}
+
+func indexCasesByKey(result *EvaluationResult) map[caseDeltaKey]CaseResult {
+	index := make(map[caseDeltaKey]CaseResult)
 	if result == nil {
 		return index
 	}
@@ -97,7 +115,11 @@ func indexCasesByCaseID(result *EvaluationResult) map[string]CaseResult {
 			if c.EvalCaseID == "" {
 				continue
 			}
-			index[c.EvalCaseID] = c
+			evalSetID := c.EvalSetID
+			if evalSetID == "" {
+				evalSetID = evalSet.EvalSetID
+			}
+			index[caseDeltaKey{evalSetID: evalSetID, evalCaseID: c.EvalCaseID}] = c
 		}
 	}
 	return index

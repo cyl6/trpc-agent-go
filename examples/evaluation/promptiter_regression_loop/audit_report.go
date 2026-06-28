@@ -137,11 +137,11 @@ func BuildMarkdownReport(report OptimizationReport) string {
 	writeEvalSummary(&md, report.Baseline)
 	writeEvalSummary(&md, report.Candidate)
 	md.WriteString("\n## Case Delta\n\n")
-	md.WriteString("| Case | Type | Baseline | Candidate | Delta |\n")
-	md.WriteString("| --- | --- | ---: | ---: | ---: |\n")
+	md.WriteString("| Eval Set | Case | Type | Baseline | Candidate | Delta |\n")
+	md.WriteString("| --- | --- | --- | ---: | ---: | ---: |\n")
 	for _, delta := range report.Delta.CaseDeltas {
-		md.WriteString(fmt.Sprintf("| %s | %s | %.4f | %.4f | %.4f |\n",
-			delta.CaseID, delta.Type, delta.BaselineScore, delta.CandidateScore, delta.ScoreDelta))
+		md.WriteString(fmt.Sprintf("| %s | %s | %s | %.4f | %.4f | %.4f |\n",
+			delta.EvalSetID, delta.CaseID, delta.Type, delta.BaselineScore, delta.CandidateScore, delta.ScoreDelta))
 	}
 	md.WriteString("\n## Failure Attribution\n\n")
 	md.WriteString("| Case | Category | Reason |\n")

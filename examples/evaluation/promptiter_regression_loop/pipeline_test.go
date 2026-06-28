@@ -11,6 +11,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,6 +74,57 @@ func TestRunRegressionLoopUsesOptimizerFakeModelQueue(t *testing.T) {
 	assert.Equal(t, customPrompt, report.Rounds[0].CandidatePrompt)
 }
 
+func TestRunRegressionLoopUsesEvalSetAndMetricsConfigFiles(t *testing.T) {
+	configDir := copyConfigDir(t)
+	outputDir := t.TempDir()
+	validationPath := filepath.Join(configDir, "validation.evalset.json")
+	validationData, err := os.ReadFile(validationPath)
+	require.NoError(t, err)
+	validationData = []byte(strings.ReplaceAll(string(validationData),
+		"validation_prompt_fixable",
+		"validation_config_driven_fixable"))
+	require.NoError(t, os.WriteFile(validationPath, validationData, 0644))
+	metricsPath := filepath.Join(configDir, "metrics.json")
+	metricsData, err := os.ReadFile(metricsPath)
+	require.NoError(t, err)
+	metricsData = []byte(strings.ReplaceAll(string(metricsData),
+		"final_response_exact_json",
+		"configured_final_metric"))
+	require.NoError(t, os.WriteFile(metricsPath, metricsData, 0644))
+
+	report, err := RunRegressionLoop(RegressionLoopConfig{
+		ConfigDir: configDir,
+		OutputDir: outputDir,
+	})
+
+	require.NoError(t, err)
+	assert.True(t, reportHasCaseDelta(report, "validation_config_driven_fixable"))
+	assert.True(t, reportHasValidationMetric(report, "configured_final_metric"))
+}
+
+func TestRunRegressionLoopRejectsOptimizerPatchForWrongSurface(t *testing.T) {
+	configDir := copyConfigDir(t)
+	outputDir := t.TempDir()
+	queue := `{
+  "optimizer": [
+    [
+      {
+        "content": "{\"patches\":[{\"surface_id\":\"wrong#instruction\",\"value\":{\"text\":\"bad\"},\"reason\":\"test queue\"}]}"
+      }
+    ]
+  ]
+}`
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "fake_model_queue.json"), []byte(queue), 0644))
+
+	_, err := RunRegressionLoop(RegressionLoopConfig{
+		ConfigDir: configDir,
+		OutputDir: outputDir,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "surface")
+}
+
 func copyConfigDir(t *testing.T) string {
 	t.Helper()
 	target := t.TempDir()
@@ -87,4 +139,31 @@ func copyConfigDir(t *testing.T) string {
 		require.NoError(t, os.WriteFile(filepath.Join(target, entry.Name()), data, 0644))
 	}
 	return target
+}
+
+func reportHasCaseDelta(report *OptimizationReport, caseID string) bool {
+	for _, delta := range report.Delta.CaseDeltas {
+		if delta.CaseID == caseID {
+			return true
+		}
+	}
+	return false
+}
+
+func reportHasValidationMetric(report *OptimizationReport, metricName string) bool {
+	for _, round := range report.Rounds {
+		if round.ValidationEvalResult == nil {
+			continue
+		}
+		for _, evalSet := range round.ValidationEvalResult.EvalSets {
+			for _, c := range evalSet.Cases {
+				for _, metric := range c.Metrics {
+					if metric.MetricName == metricName {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }
