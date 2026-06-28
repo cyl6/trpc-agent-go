@@ -210,7 +210,7 @@ func sampleCandidateValidation() *promptiterengine.EvaluationResult {
 	return evalResultFromCases("promptiter-regression-validation", []promptiterengine.CaseResult{
 		sampleCase("validation_prompt_fixable", 1, status.EvalStatusPassed, "final_response_exact_json", ""),
 		sampleCase("validation_no_effect", 0, status.EvalStatusFailed, "tool_trajectory_avg_score", "arguments mismatch: expected V-200"),
-		sampleCase("validation_overfit_guard", 0, status.EvalStatusFailed, "final_response_exact_json", "overfit regression"),
+		sampleCase("validation_overfit_guard", 0.6, status.EvalStatusFailed, "final_response_exact_json", "overfit regression"),
 	})
 }
 

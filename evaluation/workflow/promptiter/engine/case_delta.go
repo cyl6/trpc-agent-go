@@ -33,13 +33,13 @@ const (
 
 // CaseDelta stores the per-case validation difference between baseline and candidate.
 type CaseDelta struct {
-	CaseID          string
-	Type            CaseDeltaType
-	BaselineScore   float64
-	CandidateScore  float64
-	ScoreDelta      float64
-	BaselineStatus  status.EvalStatus
-	CandidateStatus status.EvalStatus
+	CaseID          string            `json:"case_id"`
+	Type            CaseDeltaType     `json:"type"`
+	BaselineScore   float64           `json:"baseline_score"`
+	CandidateScore  float64           `json:"candidate_score"`
+	ScoreDelta      float64           `json:"score_delta"`
+	BaselineStatus  status.EvalStatus `json:"baseline_status"`
+	CandidateStatus status.EvalStatus `json:"candidate_status"`
 }
 
 // CompareCaseDeltas compares validation results case by case.

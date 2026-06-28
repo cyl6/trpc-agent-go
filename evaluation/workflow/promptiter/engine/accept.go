@@ -50,23 +50,23 @@ type BudgetUsage struct {
 // GateResult records one acceptance gate outcome.
 type GateResult struct {
 	// GateName identifies the gate.
-	GateName string
+	GateName string `json:"gate_name"`
 	// Passed is true if this gate accepted the candidate.
-	Passed bool
+	Passed bool `json:"passed"`
 	// Reason explains this gate outcome.
-	Reason string
+	Reason string `json:"reason"`
 }
 
 // AcceptanceDecision records round-level pass/fail outcome and score delta.
 type AcceptanceDecision struct {
 	// Accepted is true if validation gains satisfy acceptance criteria.
-	Accepted bool
+	Accepted bool `json:"accepted"`
 	// ScoreDelta is the metric difference compared with previous accepted baseline.
-	ScoreDelta float64
+	ScoreDelta float64 `json:"score_delta"`
 	// Reason explains why acceptance succeeded or failed.
-	Reason string
+	Reason string `json:"reason"`
 	// GateResults records detailed multi-dimensional gate outcomes.
-	GateResults []GateResult
+	GateResults []GateResult `json:"gate_results,omitempty"`
 }
 
 func (e *engine) accept(

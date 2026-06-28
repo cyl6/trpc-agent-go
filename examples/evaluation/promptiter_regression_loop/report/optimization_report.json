@@ -1,0 +1,172 @@
+{
+  "metadata": {
+    "generated_at": "2026-06-28T08:28:24.930316271Z",
+    "random_seed": 7,
+    "model_config": "fake_engine",
+    "fake_engine_config": "configs/fake_model_queue.json",
+    "pipeline_version": "promptiter-regression-loop/v1"
+  },
+  "baseline": {
+    "name": "baseline",
+    "overall_score": 0.3333333333333333,
+    "passed_cases": 1,
+    "failed_cases": 2,
+    "total_cases": 3
+  },
+  "candidate": {
+    "name": "candidate",
+    "overall_score": 0.5333333333333333,
+    "passed_cases": 1,
+    "failed_cases": 2,
+    "total_cases": 3
+  },
+  "delta": {
+    "case_deltas": [
+      {
+        "case_id": "validation_no_effect",
+        "type": "unchanged",
+        "baseline_score": 0,
+        "candidate_score": 0,
+        "score_delta": 0,
+        "baseline_status": "failed",
+        "candidate_status": "failed"
+      },
+      {
+        "case_id": "validation_overfit_guard",
+        "type": "newly_failed",
+        "baseline_score": 1,
+        "candidate_score": 0.6,
+        "score_delta": -0.4,
+        "baseline_status": "passed",
+        "candidate_status": "failed"
+      },
+      {
+        "case_id": "validation_prompt_fixable",
+        "type": "newly_passed",
+        "baseline_score": 0,
+        "candidate_score": 1,
+        "score_delta": 1,
+        "baseline_status": "failed",
+        "candidate_status": "passed"
+      }
+    ],
+    "counts": {
+      "newly_failed": 1,
+      "newly_passed": 1,
+      "unchanged": 1
+    }
+  },
+  "gate_decision": {
+    "accepted": false,
+    "score_delta": 0.2,
+    "reason": "newly failed cases: validation_overfit_guard; critical case regressed: validation_overfit_guard",
+    "gate_results": [
+      {
+        "gate_name": "ValidationScoreGain",
+        "passed": true,
+        "reason": "scoreDelta=0.2000, threshold=0.0100"
+      },
+      {
+        "gate_name": "NoNewHardFail",
+        "passed": false,
+        "reason": "newly failed cases: validation_overfit_guard"
+      },
+      {
+        "gate_name": "CriticalCasePreserve",
+        "passed": false,
+        "reason": "regressed critical cases: validation_overfit_guard"
+      },
+      {
+        "gate_name": "BudgetConstraint",
+        "passed": true,
+        "reason": "apiCalls=12/200"
+      }
+    ]
+  },
+  "failure_attribution_stats": {
+    "counts": {
+      "final_response_mismatch": 1,
+      "tool_arg_error": 1
+    },
+    "attributions": [
+      {
+        "case_id": "validation_prompt_fixable",
+        "category": "final_response_mismatch",
+        "reason": "final response mismatch",
+        "evidence": "final_response_exact_json"
+      },
+      {
+        "case_id": "validation_no_effect",
+        "category": "tool_arg_error",
+        "reason": "arguments mismatch: expected V-200",
+        "evidence": "tool_trajectory_avg_score"
+      }
+    ]
+  },
+  "cost_latency": {
+    "total_cost": 0,
+    "total_api_calls": 12,
+    "total_latency_ms": 1
+  },
+  "rounds": [
+    {
+      "round_id": 1,
+      "case_deltas": [
+        {
+          "case_id": "validation_no_effect",
+          "type": "unchanged",
+          "baseline_score": 0,
+          "candidate_score": 0,
+          "score_delta": 0,
+          "baseline_status": "failed",
+          "candidate_status": "failed"
+        },
+        {
+          "case_id": "validation_overfit_guard",
+          "type": "newly_failed",
+          "baseline_score": 1,
+          "candidate_score": 0.6,
+          "score_delta": -0.4,
+          "baseline_status": "passed",
+          "candidate_status": "failed"
+        },
+        {
+          "case_id": "validation_prompt_fixable",
+          "type": "newly_passed",
+          "baseline_score": 0,
+          "candidate_score": 1,
+          "score_delta": 1,
+          "baseline_status": "failed",
+          "candidate_status": "passed"
+        }
+      ],
+      "acceptance_decision": {
+        "accepted": false,
+        "score_delta": 0.2,
+        "reason": "newly failed cases: validation_overfit_guard; critical case regressed: validation_overfit_guard",
+        "gate_results": [
+          {
+            "gate_name": "ValidationScoreGain",
+            "passed": true,
+            "reason": "scoreDelta=0.2000, threshold=0.0100"
+          },
+          {
+            "gate_name": "NoNewHardFail",
+            "passed": false,
+            "reason": "newly failed cases: validation_overfit_guard"
+          },
+          {
+            "gate_name": "CriticalCasePreserve",
+            "passed": false,
+            "reason": "regressed critical cases: validation_overfit_guard"
+          },
+          {
+            "gate_name": "BudgetConstraint",
+            "passed": true,
+            "reason": "apiCalls=12/200"
+          }
+        ]
+      }
+    }
+  ]
+}
