@@ -69,9 +69,12 @@ type CostLatencySummary struct {
 
 // RoundSnapshot stores one round audit snapshot.
 type RoundSnapshot struct {
-	RoundID    int                                  `json:"round_id"`
-	CaseDeltas []promptiterengine.CaseDelta         `json:"case_deltas"`
-	Acceptance *promptiterengine.AcceptanceDecision `json:"acceptance_decision"`
+	RoundID              int                                  `json:"round_id"`
+	CandidatePrompt      string                               `json:"candidate_prompt"`
+	TrainEvalResult      *promptiterengine.EvaluationResult   `json:"train_eval_result"`
+	ValidationEvalResult *promptiterengine.EvaluationResult   `json:"validation_eval_result"`
+	CaseDeltas           []promptiterengine.CaseDelta         `json:"case_deltas"`
+	Acceptance           *promptiterengine.AcceptanceDecision `json:"acceptance_decision"`
 }
 
 // SummarizeEvaluation summarizes an engine evaluation result.

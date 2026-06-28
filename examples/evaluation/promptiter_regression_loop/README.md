@@ -23,7 +23,7 @@ go test ./promptiter_regression_loop
 
 ## Design Notes
 
-本示例实现一个可复现的“评测 - 失败归因 - prompt 优化 - 回归验证 - 产物审计”闭环。输入侧包含 `train.evalset.json`、`validation.evalset.json`、`metrics.json`、`promptiter.json`、`baseline_prompt.txt` 和 `fake_model_queue.json`；样例共 6 条 case，训练集和验证集各 3 条，覆盖可优化成功、优化无效以及验证集关键样本退化。运行时使用 `FakeModel` 按调用次数顺序消费预设响应，并记录调用次数，因此不依赖任何真实 API key。
+本示例实现一个可复现的“评测 - 失败归因 - prompt 优化 - 回归验证 - 产物审计”闭环。输入侧包含 `train.evalset.json`、`validation.evalset.json`、`metrics.json`、`promptiter.json`、`baseline_prompt.txt` 和 `fake_model_queue.json`；样例共 6 条 case，训练集和验证集各 3 条，覆盖可优化成功、优化无效以及验证集关键样本退化。运行时通过真实 PromptIter engine 串联 evaluator、backwarder、aggregator、optimizer，其中 optimizer 使用 `FakeModel` 按调用次数顺序消费预设 patch 响应，因此不依赖任何真实 API key。
 
 失败归因基于 PromptIter engine 的 `EvaluationResult`，遍历每条 case 的 failed metric，并按 metric name 与 reason 归入六类：最终回复不匹配、工具调用错误、工具参数错误、route 错误、格式错误、知识召回不足。候选验证使用 engine 风格的逐 case delta，区分 newly passed、newly failed、score improved、score regressed 和 unchanged。
 

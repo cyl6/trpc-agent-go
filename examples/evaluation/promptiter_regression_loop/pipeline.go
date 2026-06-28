@@ -9,14 +9,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 )
 
@@ -49,11 +50,19 @@ func RunRegressionLoop(cfg RegressionLoopConfig) (*OptimizationReport, error) {
 	if err != nil {
 		return nil, err
 	}
-	baseline := sampleBaselineValidation()
-	candidate := sampleCandidateValidation()
+	artifacts, err := runPromptIter(context.Background(), promptiterCfg, cfg.ConfigDir)
+	if err != nil {
+		return nil, err
+	}
+	if len(artifacts.Result.Rounds) == 0 {
+		return nil, fmt.Errorf("promptiter run produced no rounds")
+	}
+	lastRound := artifacts.Result.Rounds[len(artifacts.Result.Rounds)-1]
+	baseline := artifacts.Result.BaselineValidation
+	candidate := lastRound.Validation
 	deltas := promptiterengine.CompareCaseDeltas(baseline, candidate)
 	attributions := NewFailureAttributor().Attribute(baseline)
-	decision := evaluateSampleGate(promptiterCfg, baseline.OverallScore, candidate.OverallScore, deltas)
+	decision := lastRound.Acceptance
 	report := OptimizationReport{
 		Metadata: ReportMetadata{
 			GeneratedAt:      time.Now().UTC(),
@@ -67,12 +76,12 @@ func RunRegressionLoop(cfg RegressionLoopConfig) (*OptimizationReport, error) {
 		Delta:                   SummarizeDeltas(deltas),
 		GateDecision:            decision,
 		FailureAttributionStats: SummarizeAttributions(attributions),
-		CostLatency:             CostLatencySummary{TotalCost: 0, TotalAPICalls: 12, TotalLatencyMillis: 1},
-		Rounds: []RoundSnapshot{{
-			RoundID:    1,
-			CaseDeltas: deltas,
-			Acceptance: decision,
-		}},
+		CostLatency: CostLatencySummary{
+			TotalCost:          artifacts.Usage.Cost,
+			TotalAPICalls:      artifacts.Usage.APICalls,
+			TotalLatencyMillis: artifacts.Usage.Latency.Milliseconds(),
+		},
+		Rounds: buildRoundSnapshots(baseline, artifacts.Result.Rounds),
 	}
 	if err := writeReports(cfg.OutputDir, report); err != nil {
 		return nil, err
@@ -109,93 +118,39 @@ func writeReports(outputDir string, report OptimizationReport) error {
 	return nil
 }
 
-func evaluateSampleGate(
-	cfg promptIterConfig,
-	baselineScore float64,
-	candidateScore float64,
-	deltas []promptiterengine.CaseDelta,
-) *promptiterengine.AcceptanceDecision {
-	scoreDelta := candidateScore - baselineScore
-	gates := []promptiterengine.GateResult{{
-		GateName: "ValidationScoreGain",
-		Passed:   scoreDelta >= cfg.MinScoreGain,
-		Reason:   fmt.Sprintf("scoreDelta=%.4f, threshold=%.4f", scoreDelta, cfg.MinScoreGain),
-	}}
-	reasons := make([]string, 0)
-	if !gates[0].Passed {
-		reasons = append(reasons, "validation score gain insufficient")
-	}
-	if cfg.NoNewHardFail {
-		newFails := caseIDsByType(deltas, promptiterengine.CaseDeltaNewlyFailed)
-		passed := len(newFails) == 0
-		gates = append(gates, promptiterengine.GateResult{
-			GateName: "NoNewHardFail",
-			Passed:   passed,
-			Reason:   "newly failed cases: " + strings.Join(newFails, ","),
+func buildRoundSnapshots(
+	baseline *promptiterengine.EvaluationResult,
+	rounds []promptiterengine.RoundResult,
+) []RoundSnapshot {
+	snapshots := make([]RoundSnapshot, 0, len(rounds))
+	acceptedValidation := baseline
+	for _, round := range rounds {
+		deltas := promptiterengine.CompareCaseDeltas(acceptedValidation, round.Validation)
+		snapshots = append(snapshots, RoundSnapshot{
+			RoundID:              round.Round,
+			CandidatePrompt:      profilePrompt(round.OutputProfile),
+			TrainEvalResult:      round.Train,
+			ValidationEvalResult: round.Validation,
+			CaseDeltas:           deltas,
+			Acceptance:           round.Acceptance,
 		})
-		if !passed {
-			reasons = append(reasons, "newly failed cases: "+strings.Join(newFails, ","))
+		if round.Acceptance != nil && round.Acceptance.Accepted {
+			acceptedValidation = round.Validation
 		}
 	}
-	if len(cfg.CriticalCaseIDs) > 0 {
-		criticalRegressed := criticalRegressions(deltas, cfg.CriticalCaseIDs)
-		passed := len(criticalRegressed) == 0
-		gates = append(gates, promptiterengine.GateResult{
-			GateName: "CriticalCasePreserve",
-			Passed:   passed,
-			Reason:   "regressed critical cases: " + strings.Join(criticalRegressed, ","),
-		})
-		if !passed {
-			reasons = append(reasons, "critical case regressed: "+strings.Join(criticalRegressed, ","))
-		}
-	}
-	budgetPassed := cfg.MaxAPICalls == 0 || 12 <= cfg.MaxAPICalls
-	gates = append(gates, promptiterengine.GateResult{
-		GateName: "BudgetConstraint",
-		Passed:   budgetPassed,
-		Reason:   fmt.Sprintf("apiCalls=%d/%d", 12, cfg.MaxAPICalls),
-	})
-	if !budgetPassed {
-		reasons = append(reasons, "budget exceeded")
-	}
-	accepted := len(reasons) == 0
-	reason := "all gates passed"
-	if !accepted {
-		reason = strings.Join(reasons, "; ")
-	}
-	return &promptiterengine.AcceptanceDecision{
-		Accepted:    accepted,
-		ScoreDelta:  scoreDelta,
-		Reason:      reason,
-		GateResults: gates,
-	}
+	return snapshots
 }
 
-func caseIDsByType(deltas []promptiterengine.CaseDelta, deltaType promptiterengine.CaseDeltaType) []string {
-	var ids []string
-	for _, delta := range deltas {
-		if delta.Type == deltaType {
-			ids = append(ids, delta.CaseID)
+func profilePrompt(profile *promptiter.Profile) string {
+	if profile == nil {
+		return ""
+	}
+	for _, override := range profile.Overrides {
+		if override.SurfaceID == regressionSurfaceID && override.Value.Text != nil {
+			return *override.Value.Text
 		}
 	}
-	return ids
-}
-
-func criticalRegressions(deltas []promptiterengine.CaseDelta, criticalCaseIDs []string) []string {
-	critical := make(map[string]struct{}, len(criticalCaseIDs))
-	for _, caseID := range criticalCaseIDs {
-		critical[caseID] = struct{}{}
-	}
-	var ids []string
-	for _, delta := range deltas {
-		if _, ok := critical[delta.CaseID]; !ok {
-			continue
-		}
-		if delta.Type == promptiterengine.CaseDeltaNewlyFailed || delta.Type == promptiterengine.CaseDeltaScoreRegressed {
-			ids = append(ids, delta.CaseID)
-		}
-	}
-	return ids
+	return ""
 }
 
 func sampleBaselineValidation() *promptiterengine.EvaluationResult {

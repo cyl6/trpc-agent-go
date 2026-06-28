@@ -4,7 +4,7 @@
 
 Accepted: false
 
-Reason: newly failed cases: validation_overfit_guard; critical case regressed: validation_overfit_guard
+Reason: newly failed cases: validation_overfit_guard; regressed critical cases: validation_overfit_guard
 
 ## Baseline vs Candidate
 

@@ -40,5 +40,49 @@ func TestRunRegressionLoopWritesOptimizationReports(t *testing.T) {
 	assert.Contains(t, string(jsonReport), "baseline")
 	assert.Contains(t, string(jsonReport), "candidate")
 	assert.Contains(t, string(jsonReport), "gate_decision")
+	assert.Contains(t, string(jsonReport), "candidate_prompt")
+	assert.Contains(t, string(jsonReport), "train_eval_result")
+	assert.Contains(t, string(jsonReport), "validation_eval_result")
 	assert.Contains(t, string(mdReport), "Optimization Report")
+}
+
+func TestRunRegressionLoopUsesOptimizerFakeModelQueue(t *testing.T) {
+	configDir := copyConfigDir(t)
+	outputDir := t.TempDir()
+	customPrompt := "Queue supplied candidate prompt."
+	queue := `{
+  "optimizer": [
+    [
+      {
+        "content": "{\"patches\":[{\"surface_id\":\"candidate#instruction\",\"value\":{\"text\":\"` + customPrompt + `\"},\"reason\":\"test queue\"}]}"
+      }
+    ]
+  ]
+}`
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "fake_model_queue.json"), []byte(queue), 0644))
+
+	report, err := RunRegressionLoop(RegressionLoopConfig{
+		ConfigDir: configDir,
+		OutputDir: outputDir,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, report.Rounds, 1)
+	assert.Equal(t, customPrompt, report.Rounds[0].CandidatePrompt)
+}
+
+func copyConfigDir(t *testing.T) string {
+	t.Helper()
+	target := t.TempDir()
+	entries, err := os.ReadDir("configs")
+	require.NoError(t, err)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join("configs", entry.Name()))
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(target, entry.Name()), data, 0644))
+	}
+	return target
 }

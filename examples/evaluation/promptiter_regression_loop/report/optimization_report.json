@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "generated_at": "2026-06-28T08:28:24.930316271Z",
+    "generated_at": "2026-06-28T08:39:47.766455772Z",
     "random_seed": 7,
     "model_config": "fake_engine",
     "fake_engine_config": "configs/fake_model_queue.json",
@@ -59,7 +59,7 @@
   "gate_decision": {
     "accepted": false,
     "score_delta": 0.2,
-    "reason": "newly failed cases: validation_overfit_guard; critical case regressed: validation_overfit_guard",
+    "reason": "newly failed cases: validation_overfit_guard; regressed critical cases: validation_overfit_guard",
     "gate_results": [
       {
         "gate_name": "ValidationScoreGain",
@@ -79,7 +79,7 @@
       {
         "gate_name": "BudgetConstraint",
         "passed": true,
-        "reason": "apiCalls=12/200"
+        "reason": "within budget"
       }
     ]
   },
@@ -111,6 +111,293 @@
   "rounds": [
     {
       "round_id": 1,
+      "candidate_prompt": "Always answer with compact JSON using the exact account id, status, and source from tool or cache evidence.",
+      "train_eval_result": {
+        "OverallScore": 0.3333333333333333,
+        "EvalSets": [
+          {
+            "EvalSetID": "promptiter-regression-train",
+            "OverallScore": 0.3333333333333333,
+            "Cases": [
+              {
+                "EvalSetID": "promptiter-regression-train",
+                "EvalCaseID": "train_prompt_fixable",
+                "SessionID": "session_train_prompt_fixable",
+                "Trace": {
+                  "RootAgentName": "candidate",
+                  "RootInvocationID": "invocation_train_prompt_fixable",
+                  "SessionID": "session_train_prompt_fixable",
+                  "StartedAt": "0001-01-01T00:00:00Z",
+                  "EndedAt": "0001-01-01T00:00:00Z",
+                  "Status": "completed",
+                  "Steps": [
+                    {
+                      "StepID": "step_train_prompt_fixable",
+                      "InvocationID": "invocation_train_prompt_fixable",
+                      "ParentInvocationID": "",
+                      "AgentName": "candidate",
+                      "Branch": "",
+                      "NodeID": "candidate",
+                      "StartedAt": "0001-01-01T00:00:00Z",
+                      "EndedAt": "0001-01-01T00:00:00Z",
+                      "PredecessorStepIDs": null,
+                      "AppliedSurfaceIDs": [
+                        "candidate#instruction"
+                      ],
+                      "Input": {
+                        "Text": "input train_prompt_fixable"
+                      },
+                      "Output": {
+                        "Text": "output train_prompt_fixable"
+                      },
+                      "Error": ""
+                    }
+                  ]
+                },
+                "Metrics": [
+                  {
+                    "MetricName": "final_response_exact_json",
+                    "Score": 0,
+                    "Status": "failed",
+                    "Reason": "final response mismatch"
+                  }
+                ]
+              },
+              {
+                "EvalSetID": "promptiter-regression-train",
+                "EvalCaseID": "train_tool_argument_error",
+                "SessionID": "session_train_tool_argument_error",
+                "Trace": {
+                  "RootAgentName": "candidate",
+                  "RootInvocationID": "invocation_train_tool_argument_error",
+                  "SessionID": "session_train_tool_argument_error",
+                  "StartedAt": "0001-01-01T00:00:00Z",
+                  "EndedAt": "0001-01-01T00:00:00Z",
+                  "Status": "completed",
+                  "Steps": [
+                    {
+                      "StepID": "step_train_tool_argument_error",
+                      "InvocationID": "invocation_train_tool_argument_error",
+                      "ParentInvocationID": "",
+                      "AgentName": "candidate",
+                      "Branch": "",
+                      "NodeID": "candidate",
+                      "StartedAt": "0001-01-01T00:00:00Z",
+                      "EndedAt": "0001-01-01T00:00:00Z",
+                      "PredecessorStepIDs": null,
+                      "AppliedSurfaceIDs": [
+                        "candidate#instruction"
+                      ],
+                      "Input": {
+                        "Text": "input train_tool_argument_error"
+                      },
+                      "Output": {
+                        "Text": "output train_tool_argument_error"
+                      },
+                      "Error": ""
+                    }
+                  ]
+                },
+                "Metrics": [
+                  {
+                    "MetricName": "tool_trajectory_avg_score",
+                    "Score": 0,
+                    "Status": "failed",
+                    "Reason": "arguments mismatch: expected B-200"
+                  }
+                ]
+              },
+              {
+                "EvalSetID": "promptiter-regression-train",
+                "EvalCaseID": "train_already_passed",
+                "SessionID": "session_train_already_passed",
+                "Trace": {
+                  "RootAgentName": "candidate",
+                  "RootInvocationID": "invocation_train_already_passed",
+                  "SessionID": "session_train_already_passed",
+                  "StartedAt": "0001-01-01T00:00:00Z",
+                  "EndedAt": "0001-01-01T00:00:00Z",
+                  "Status": "completed",
+                  "Steps": [
+                    {
+                      "StepID": "step_train_already_passed",
+                      "InvocationID": "invocation_train_already_passed",
+                      "ParentInvocationID": "",
+                      "AgentName": "candidate",
+                      "Branch": "",
+                      "NodeID": "candidate",
+                      "StartedAt": "0001-01-01T00:00:00Z",
+                      "EndedAt": "0001-01-01T00:00:00Z",
+                      "PredecessorStepIDs": null,
+                      "AppliedSurfaceIDs": [
+                        "candidate#instruction"
+                      ],
+                      "Input": {
+                        "Text": "input train_already_passed"
+                      },
+                      "Output": {
+                        "Text": "output train_already_passed"
+                      },
+                      "Error": ""
+                    }
+                  ]
+                },
+                "Metrics": [
+                  {
+                    "MetricName": "final_response_exact_json",
+                    "Score": 1,
+                    "Status": "passed",
+                    "Reason": ""
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "validation_eval_result": {
+        "OverallScore": 0.5333333333333333,
+        "EvalSets": [
+          {
+            "EvalSetID": "promptiter-regression-validation",
+            "OverallScore": 0.5333333333333333,
+            "Cases": [
+              {
+                "EvalSetID": "promptiter-regression-validation",
+                "EvalCaseID": "validation_prompt_fixable",
+                "SessionID": "session_validation_prompt_fixable",
+                "Trace": {
+                  "RootAgentName": "candidate",
+                  "RootInvocationID": "invocation_validation_prompt_fixable",
+                  "SessionID": "session_validation_prompt_fixable",
+                  "StartedAt": "0001-01-01T00:00:00Z",
+                  "EndedAt": "0001-01-01T00:00:00Z",
+                  "Status": "completed",
+                  "Steps": [
+                    {
+                      "StepID": "step_validation_prompt_fixable",
+                      "InvocationID": "invocation_validation_prompt_fixable",
+                      "ParentInvocationID": "",
+                      "AgentName": "candidate",
+                      "Branch": "",
+                      "NodeID": "candidate",
+                      "StartedAt": "0001-01-01T00:00:00Z",
+                      "EndedAt": "0001-01-01T00:00:00Z",
+                      "PredecessorStepIDs": null,
+                      "AppliedSurfaceIDs": [
+                        "candidate#instruction"
+                      ],
+                      "Input": {
+                        "Text": "input validation_prompt_fixable"
+                      },
+                      "Output": {
+                        "Text": "output validation_prompt_fixable"
+                      },
+                      "Error": ""
+                    }
+                  ]
+                },
+                "Metrics": [
+                  {
+                    "MetricName": "final_response_exact_json",
+                    "Score": 1,
+                    "Status": "passed",
+                    "Reason": ""
+                  }
+                ]
+              },
+              {
+                "EvalSetID": "promptiter-regression-validation",
+                "EvalCaseID": "validation_no_effect",
+                "SessionID": "session_validation_no_effect",
+                "Trace": {
+                  "RootAgentName": "candidate",
+                  "RootInvocationID": "invocation_validation_no_effect",
+                  "SessionID": "session_validation_no_effect",
+                  "StartedAt": "0001-01-01T00:00:00Z",
+                  "EndedAt": "0001-01-01T00:00:00Z",
+                  "Status": "completed",
+                  "Steps": [
+                    {
+                      "StepID": "step_validation_no_effect",
+                      "InvocationID": "invocation_validation_no_effect",
+                      "ParentInvocationID": "",
+                      "AgentName": "candidate",
+                      "Branch": "",
+                      "NodeID": "candidate",
+                      "StartedAt": "0001-01-01T00:00:00Z",
+                      "EndedAt": "0001-01-01T00:00:00Z",
+                      "PredecessorStepIDs": null,
+                      "AppliedSurfaceIDs": [
+                        "candidate#instruction"
+                      ],
+                      "Input": {
+                        "Text": "input validation_no_effect"
+                      },
+                      "Output": {
+                        "Text": "output validation_no_effect"
+                      },
+                      "Error": ""
+                    }
+                  ]
+                },
+                "Metrics": [
+                  {
+                    "MetricName": "tool_trajectory_avg_score",
+                    "Score": 0,
+                    "Status": "failed",
+                    "Reason": "arguments mismatch: expected V-200"
+                  }
+                ]
+              },
+              {
+                "EvalSetID": "promptiter-regression-validation",
+                "EvalCaseID": "validation_overfit_guard",
+                "SessionID": "session_validation_overfit_guard",
+                "Trace": {
+                  "RootAgentName": "candidate",
+                  "RootInvocationID": "invocation_validation_overfit_guard",
+                  "SessionID": "session_validation_overfit_guard",
+                  "StartedAt": "0001-01-01T00:00:00Z",
+                  "EndedAt": "0001-01-01T00:00:00Z",
+                  "Status": "completed",
+                  "Steps": [
+                    {
+                      "StepID": "step_validation_overfit_guard",
+                      "InvocationID": "invocation_validation_overfit_guard",
+                      "ParentInvocationID": "",
+                      "AgentName": "candidate",
+                      "Branch": "",
+                      "NodeID": "candidate",
+                      "StartedAt": "0001-01-01T00:00:00Z",
+                      "EndedAt": "0001-01-01T00:00:00Z",
+                      "PredecessorStepIDs": null,
+                      "AppliedSurfaceIDs": [
+                        "candidate#instruction"
+                      ],
+                      "Input": {
+                        "Text": "input validation_overfit_guard"
+                      },
+                      "Output": {
+                        "Text": "output validation_overfit_guard"
+                      },
+                      "Error": ""
+                    }
+                  ]
+                },
+                "Metrics": [
+                  {
+                    "MetricName": "final_response_exact_json",
+                    "Score": 0.6,
+                    "Status": "failed",
+                    "Reason": "overfit regression"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
       "case_deltas": [
         {
           "case_id": "validation_no_effect",
@@ -143,7 +430,7 @@
       "acceptance_decision": {
         "accepted": false,
         "score_delta": 0.2,
-        "reason": "newly failed cases: validation_overfit_guard; critical case regressed: validation_overfit_guard",
+        "reason": "newly failed cases: validation_overfit_guard; regressed critical cases: validation_overfit_guard",
         "gate_results": [
           {
             "gate_name": "ValidationScoreGain",
@@ -163,7 +450,7 @@
           {
             "gate_name": "BudgetConstraint",
             "passed": true,
-            "reason": "apiCalls=12/200"
+            "reason": "within budget"
           }
         ]
       }
