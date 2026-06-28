@@ -1,0 +1,158 @@
+{
+  "evalSetId": "promptiter-regression-validation",
+  "name": "promptiter-regression-validation",
+  "evalCases": [
+    {
+      "evalId": "validation_prompt_fixable",
+      "evalMode": "trace",
+      "conversation": [
+        {
+          "invocationId": "validation_prompt_fixable-1",
+          "userContent": {
+            "role": "user",
+            "content": "Use the lookup tool and answer with JSON for account V-100."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"account\":\"V-100\",\"status\":\"active\",\"source\":\"lookup\"}"
+          },
+          "tools": [
+            {
+              "id": "call_validation_fixable_lookup",
+              "name": "account_lookup",
+              "arguments": {
+                "account_id": "V-100"
+              },
+              "result": {
+                "status": "active"
+              }
+            }
+          ]
+        }
+      ],
+      "actualConversation": [
+        {
+          "invocationId": "validation_prompt_fixable-1",
+          "userContent": {
+            "role": "user",
+            "content": "Use the lookup tool and answer with JSON for account V-100."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Account V-100 is active."
+          },
+          "tools": [
+            {
+              "id": "call_validation_fixable_lookup",
+              "name": "account_lookup",
+              "arguments": {
+                "account_id": "V-100"
+              },
+              "result": {
+                "status": "active"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "demo-user"
+      }
+    },
+    {
+      "evalId": "validation_no_effect",
+      "evalMode": "trace",
+      "conversation": [
+        {
+          "invocationId": "validation_no_effect-1",
+          "userContent": {
+            "role": "user",
+            "content": "Lookup account V-200 before answering."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"account\":\"V-200\",\"status\":\"suspended\",\"source\":\"lookup\"}"
+          },
+          "tools": [
+            {
+              "id": "call_validation_no_effect_lookup",
+              "name": "account_lookup",
+              "arguments": {
+                "account_id": "V-200"
+              },
+              "result": {
+                "status": "suspended"
+              }
+            }
+          ]
+        }
+      ],
+      "actualConversation": [
+        {
+          "invocationId": "validation_no_effect-1",
+          "userContent": {
+            "role": "user",
+            "content": "Lookup account V-200 before answering."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"account\":\"V-201\",\"status\":\"suspended\",\"source\":\"lookup\"}"
+          },
+          "tools": [
+            {
+              "id": "call_validation_no_effect_lookup",
+              "name": "account_lookup",
+              "arguments": {
+                "account_id": "V-201"
+              },
+              "result": {
+                "status": "suspended"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "demo-user"
+      }
+    },
+    {
+      "evalId": "validation_overfit_guard",
+      "evalMode": "trace",
+      "conversation": [
+        {
+          "invocationId": "validation_overfit_guard-1",
+          "userContent": {
+            "role": "user",
+            "content": "Return compact JSON for account V-300."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"account\":\"V-300\",\"status\":\"active\",\"source\":\"cache\"}"
+          },
+          "tools": []
+        }
+      ],
+      "actualConversation": [
+        {
+          "invocationId": "validation_overfit_guard-1",
+          "userContent": {
+            "role": "user",
+            "content": "Return compact JSON for account V-300."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"account\":\"V-300\",\"status\":\"active\",\"source\":\"cache\"}"
+          },
+          "tools": []
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "max_rounds": 2,
+  "min_score_gain": 0.01,
+  "target_score": 0.95,
+  "no_new_hard_fail": true,
+  "critical_case_ids": [
+    "validation_overfit_guard"
+  ],
+  "max_api_calls": 200
+}
