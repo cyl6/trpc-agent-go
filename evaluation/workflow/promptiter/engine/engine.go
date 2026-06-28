@@ -207,13 +207,14 @@ func (e *engine) Describe(ctx context.Context) (*astructure.Snapshot, error) {
 // Run executes all optimization stages in sequence for each configured round.
 func (e *engine) Run(ctx context.Context, request *RunRequest, opts ...Option) (*RunResult, error) {
 	options := newOptions(opts...)
-	return e.run(ctx, request, options.observer)
+	return e.run(ctx, request, options.observer, options.budgetUsageProvider)
 }
 
 func (e *engine) run(
 	ctx context.Context,
 	request *RunRequest,
 	observer Observer,
+	budgetUsageProvider BudgetUsageProvider,
 ) (*RunResult, error) {
 	if err := e.validateRunRequest(request); err != nil {
 		return nil, err
@@ -239,6 +240,7 @@ func (e *engine) run(
 	}
 	evaluationOptions := request.EvaluationOptions
 	acceptedProfile := initialProfile
+	acceptedValidation := (*EvaluationResult)(nil)
 	acceptedValidationScore := 0.0
 	baselineValidation, err := e.evaluate(ctx, structure, e.newEvaluationRequest(
 		request.Validation,
@@ -254,6 +256,7 @@ func (e *engine) run(
 	if err != nil {
 		return nil, fmt.Errorf("compute accepted baseline score: %w", err)
 	}
+	acceptedValidation = baselineValidation
 	if err := appendRunEvent(ctx, observer, EventKindBaselineValidation, 0, baselineValidation); err != nil {
 		return nil, err
 	}
@@ -276,7 +279,9 @@ func (e *engine) run(
 			observer,
 			evaluationOptions,
 			acceptedProfile,
+			acceptedValidation,
 			acceptedValidationScore,
+			budgetUsageProvider,
 			roundNumber,
 		)
 		if err != nil {
@@ -284,6 +289,7 @@ func (e *engine) run(
 		}
 		if roundResult.Acceptance.Accepted {
 			acceptedProfile = roundResult.OutputProfile
+			acceptedValidation = roundResult.Validation
 			acceptedValidationScore = effectiveScore
 			roundsWithoutAcceptance = 0
 		} else {
@@ -377,7 +383,9 @@ func (e *engine) executeRound(
 	observer Observer,
 	evaluationOptions EvaluationOptions,
 	acceptedProfile *promptiter.Profile,
+	acceptedValidation *EvaluationResult,
 	acceptedValidationScore float64,
+	budgetUsageProvider BudgetUsageProvider,
 	roundNumber int,
 ) (*RoundResult, float64, error) {
 	if err := appendRunEvent(ctx, observer, EventKindRoundStarted, roundNumber, nil); err != nil {
@@ -485,7 +493,12 @@ func (e *engine) executeRound(
 	if err := appendRunEvent(ctx, observer, EventKindRoundValidation, roundNumber, validationResult); err != nil {
 		return nil, 0, err
 	}
-	acceptanceDecision := e.accept(request.AcceptancePolicy, baselineScore, candidateScore)
+	caseDeltas := CompareCaseDeltas(acceptedValidation, validationResult)
+	usage := BudgetUsage{}
+	if budgetUsageProvider != nil {
+		usage = budgetUsageProvider()
+	}
+	acceptanceDecision := e.accept(request.AcceptancePolicy, baselineScore, candidateScore, caseDeltas, usage)
 	roundResult.Acceptance = acceptanceDecision
 	effectiveScore := baselineScore
 	if acceptanceDecision.Accepted {
