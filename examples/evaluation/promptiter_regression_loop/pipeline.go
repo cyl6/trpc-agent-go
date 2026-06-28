@@ -23,6 +23,8 @@ import (
 
 const pipelineVersion = "promptiter-regression-loop/v1"
 
+var deterministicGeneratedAt = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
 // RegressionLoopConfig configures the deterministic regression-loop example.
 type RegressionLoopConfig struct {
 	ConfigDir string
@@ -65,7 +67,7 @@ func RunRegressionLoop(cfg RegressionLoopConfig) (*OptimizationReport, error) {
 	decision := lastRound.Acceptance
 	report := OptimizationReport{
 		Metadata: ReportMetadata{
-			GeneratedAt:      time.Now().UTC(),
+			GeneratedAt:      deterministicGeneratedAt,
 			RandomSeed:       7,
 			ModelConfig:      "fake_engine",
 			FakeEngineConfig: filepath.Join(cfg.ConfigDir, "fake_model_queue.json"),
