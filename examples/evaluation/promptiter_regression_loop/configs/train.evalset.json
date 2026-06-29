@@ -1,0 +1,158 @@
+{
+  "evalSetId": "promptiter-regression-train",
+  "name": "promptiter-regression-train",
+  "evalCases": [
+    {
+      "evalId": "train_prompt_fixable",
+      "evalMode": "trace",
+      "conversation": [
+        {
+          "invocationId": "train_prompt_fixable-1",
+          "userContent": {
+            "role": "user",
+            "content": "Use the lookup tool and answer with JSON for account A-100."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"account\":\"A-100\",\"status\":\"active\",\"source\":\"lookup\"}"
+          },
+          "tools": [
+            {
+              "id": "call_train_fixable_lookup",
+              "name": "account_lookup",
+              "arguments": {
+                "account_id": "A-100"
+              },
+              "result": {
+                "status": "active"
+              }
+            }
+          ]
+        }
+      ],
+      "actualConversation": [
+        {
+          "invocationId": "train_prompt_fixable-1",
+          "userContent": {
+            "role": "user",
+            "content": "Use the lookup tool and answer with JSON for account A-100."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Account A-100 is active."
+          },
+          "tools": [
+            {
+              "id": "call_train_fixable_lookup",
+              "name": "account_lookup",
+              "arguments": {
+                "account_id": "A-100"
+              },
+              "result": {
+                "status": "active"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "demo-user"
+      }
+    },
+    {
+      "evalId": "train_tool_argument_error",
+      "evalMode": "trace",
+      "conversation": [
+        {
+          "invocationId": "train_tool_argument_error-1",
+          "userContent": {
+            "role": "user",
+            "content": "Lookup account B-200 before answering."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"account\":\"B-200\",\"status\":\"suspended\",\"source\":\"lookup\"}"
+          },
+          "tools": [
+            {
+              "id": "call_train_arg_lookup",
+              "name": "account_lookup",
+              "arguments": {
+                "account_id": "B-200"
+              },
+              "result": {
+                "status": "suspended"
+              }
+            }
+          ]
+        }
+      ],
+      "actualConversation": [
+        {
+          "invocationId": "train_tool_argument_error-1",
+          "userContent": {
+            "role": "user",
+            "content": "Lookup account B-200 before answering."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"account\":\"B-201\",\"status\":\"suspended\",\"source\":\"lookup\"}"
+          },
+          "tools": [
+            {
+              "id": "call_train_arg_lookup",
+              "name": "account_lookup",
+              "arguments": {
+                "account_id": "B-201"
+              },
+              "result": {
+                "status": "suspended"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "demo-user"
+      }
+    },
+    {
+      "evalId": "train_already_passed",
+      "evalMode": "trace",
+      "conversation": [
+        {
+          "invocationId": "train_already_passed-1",
+          "userContent": {
+            "role": "user",
+            "content": "Return compact JSON for account C-300."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"account\":\"C-300\",\"status\":\"active\",\"source\":\"cache\"}"
+          },
+          "tools": []
+        }
+      ],
+      "actualConversation": [
+        {
+          "invocationId": "train_already_passed-1",
+          "userContent": {
+            "role": "user",
+            "content": "Return compact JSON for account C-300."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"account\":\"C-300\",\"status\":\"active\",\"source\":\"cache\"}"
+          },
+          "tools": []
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}

@@ -10,16 +10,27 @@
 package engine
 
 type options struct {
-	observer Observer
+	observer            Observer
+	budgetUsageProvider BudgetUsageProvider
 }
 
 // Option configures one advanced PromptIter run behavior.
 type Option func(*options)
 
+// BudgetUsageProvider returns the current usage snapshot for acceptance checks.
+type BudgetUsageProvider func() BudgetUsage
+
 // WithObserver appends one runtime observer to the run.
 func WithObserver(observer Observer) Option {
 	return func(opts *options) {
 		opts.observer = observer
+	}
+}
+
+// WithBudgetUsageProvider configures usage snapshots used by acceptance gates.
+func WithBudgetUsageProvider(provider BudgetUsageProvider) Option {
+	return func(opts *options) {
+		opts.budgetUsageProvider = provider
 	}
 }
 

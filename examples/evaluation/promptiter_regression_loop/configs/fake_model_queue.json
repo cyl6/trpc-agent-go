@@ -1,0 +1,47 @@
+{
+  "candidate": [
+    [
+      {
+        "content": "Account lookup result in prose."
+      }
+    ],
+    [
+      {
+        "content": "{\"account\":\"A-100\",\"status\":\"active\",\"source\":\"lookup\"}"
+      }
+    ]
+  ],
+  "judge": [
+    [
+      {
+        "content": "{\"score\":0.5,\"passed\":false,\"reason\":\"format_json failed\"}"
+      }
+    ],
+    [
+      {
+        "content": "{\"score\":1.0,\"passed\":true,\"reason\":\"all rubrics passed\"}"
+      }
+    ]
+  ],
+  "backwarder": [
+    [
+      {
+        "content": "{\"gradients\":[{\"surface_id\":\"candidate#instruction\",\"gradient\":\"Require compact JSON and preserve lookup facts.\"}]}"
+      }
+    ]
+  ],
+  "aggregator": [
+    [
+      {
+        "content": "{\"gradients\":[{\"surface_id\":\"candidate#instruction\",\"gradient\":\"Require compact JSON and preserve lookup facts.\"}]}"
+      }
+    ]
+  ],
+  "optimizer": [
+    [
+      {
+        "content": "{\"patches\":[{\"surface_id\":\"candidate#instruction\",\"value\":{\"text\":\"Always answer with compact JSON using the exact account id, status, and source from tool or cache evidence.\"},\"reason\":\"tighten JSON and grounding requirements\"}]}"
+      }
+    ]
+  ]
+}
