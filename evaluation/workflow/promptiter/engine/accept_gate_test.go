@@ -31,6 +31,21 @@ func TestAcceptRejectsNewHardFail(t *testing.T) {
 	assertGateFailed(t, decision, "NoNewHardFail")
 }
 
+func TestAcceptRejectsInsufficientValidationScoreGain(t *testing.T) {
+	decision := (&engine{}).accept(AcceptancePolicy{
+		MinScoreGain: 0.01,
+	}, 0.7, 0.6, []CaseDelta{{
+		CaseID: "regressed_but_not_new_fail",
+		Type:   CaseDeltaScoreRegressed,
+	}}, BudgetUsage{})
+
+	require.NotNil(t, decision)
+	assert.False(t, decision.Accepted)
+	assert.Contains(t, decision.Reason, "validation score gain insufficient")
+	assert.InDelta(t, -0.1, decision.ScoreDelta, 0.0001)
+	assertGateFailed(t, decision, "ValidationScoreGain")
+}
+
 func TestAcceptRejectsCriticalCaseRegression(t *testing.T) {
 	decision := (&engine{}).accept(AcceptancePolicy{
 		MinScoreGain:    0.01,

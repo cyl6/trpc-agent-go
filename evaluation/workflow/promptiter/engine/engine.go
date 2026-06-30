@@ -305,9 +305,11 @@ func (e *engine) run(
 		accepted := roundResult.Acceptance != nil && roundResult.Acceptance.Accepted
 		acceptanceReason := ""
 		scoreDelta := 0.0
+		var gateResults []GateResult
 		if roundResult.Acceptance != nil {
 			acceptanceReason = roundResult.Acceptance.Reason
 			scoreDelta = roundResult.Acceptance.ScoreDelta
+			gateResults = append([]GateResult(nil), roundResult.Acceptance.GateResults...)
 		}
 		shouldStop := false
 		stopReason := ""
@@ -319,6 +321,7 @@ func (e *engine) run(
 			Accepted:         accepted,
 			AcceptanceReason: acceptanceReason,
 			ScoreDelta:       scoreDelta,
+			GateResults:      gateResults,
 			ShouldStop:       shouldStop,
 			StopReason:       stopReason,
 		}); err != nil {

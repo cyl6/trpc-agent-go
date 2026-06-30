@@ -700,6 +700,10 @@ func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 	assert.Equal(t, EventKindRoundCompleted, observedEvents[10].Kind)
 	assert.Equal(t, 1, observedEvents[10].Round)
 	assert.IsType(t, &RoundCompleted{}, observedEvents[10].Payload)
+	completedPayload, ok := observedEvents[10].Payload.(*RoundCompleted)
+	require.True(t, ok)
+	require.Len(t, completedPayload.GateResults, 1)
+	assert.Equal(t, "ValidationScoreGain", completedPayload.GateResults[0].GateName)
 }
 
 func TestRunPassesEvalCaseIDsToTrainAndValidationInputs(t *testing.T) {

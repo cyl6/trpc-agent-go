@@ -63,6 +63,8 @@ type RoundCompleted struct {
 	AcceptanceReason string
 	// ScoreDelta stores the validation score delta against the accepted baseline.
 	ScoreDelta float64
+	// GateResults stores detailed acceptance gate outcomes.
+	GateResults []GateResult
 	// ShouldStop indicates whether this round triggered stop conditions.
 	ShouldStop bool
 	// StopReason stores the stop decision rationale.

@@ -63,7 +63,7 @@ func RunRegressionLoop(cfg RegressionLoopConfig) (*OptimizationReport, error) {
 	baseline := artifacts.Result.BaselineValidation
 	candidate := lastRound.Validation
 	deltas := promptiterengine.CompareCaseDeltas(baseline, candidate)
-	attributions := NewFailureAttributor().Attribute(baseline)
+	attributions := baselineFailureAttributions(artifacts.Result)
 	decision := lastRound.Acceptance
 	report := OptimizationReport{
 		Metadata: ReportMetadata{
@@ -89,6 +89,19 @@ func RunRegressionLoop(cfg RegressionLoopConfig) (*OptimizationReport, error) {
 		return nil, err
 	}
 	return &report, nil
+}
+
+func baselineFailureAttributions(result *promptiterengine.RunResult) []FailureAttribution {
+	if result == nil {
+		return nil
+	}
+	attributor := NewFailureAttributor()
+	attributions := make([]FailureAttribution, 0)
+	if len(result.Rounds) > 0 {
+		attributions = append(attributions, attributor.Attribute(result.Rounds[0].Train)...)
+	}
+	attributions = append(attributions, attributor.Attribute(result.BaselineValidation)...)
+	return attributions
 }
 
 func loadPromptIterConfig(path string) (promptIterConfig, error) {

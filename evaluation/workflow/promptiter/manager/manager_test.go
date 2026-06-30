@@ -459,8 +459,13 @@ func TestRunObserverBuildsIncrementalRun(t *testing.T) {
 			Accepted:         true,
 			AcceptanceReason: "accepted",
 			ScoreDelta:       0.20,
-			ShouldStop:       true,
-			StopReason:       "target reached",
+			GateResults: []promptiterengine.GateResult{{
+				GateName: "ValidationScoreGain",
+				Passed:   true,
+				Reason:   "scoreDelta=0.2000, threshold=0.0100",
+			}},
+			ShouldStop: true,
+			StopReason: "target reached",
 		},
 	}))
 	current, err := concreteManager.Get(context.Background(), run.ID)
@@ -478,6 +483,8 @@ func TestRunObserverBuildsIncrementalRun(t *testing.T) {
 	assert.InDelta(t, 0.75, current.Rounds[0].Validation.OverallScore, 0.0001)
 	require.NotNil(t, current.Rounds[0].Acceptance)
 	assert.True(t, current.Rounds[0].Acceptance.Accepted)
+	require.Len(t, current.Rounds[0].Acceptance.GateResults, 1)
+	assert.Equal(t, "ValidationScoreGain", current.Rounds[0].Acceptance.GateResults[0].GateName)
 	require.NotNil(t, current.Rounds[0].Stop)
 	assert.True(t, current.Rounds[0].Stop.ShouldStop)
 	require.NotNil(t, current.AcceptedProfile)
@@ -1228,6 +1235,15 @@ func TestCloneRunRequestDeepCopiesFields(t *testing.T) {
 			SurfaceParallelismEnabled: true,
 			SurfaceParallelism:        2,
 		},
+		AcceptancePolicy: promptiterengine.AcceptancePolicy{
+			MinScoreGain:    0.1,
+			NoNewHardFail:   true,
+			CriticalCaseIDs: []string{"critical_case"},
+			BudgetConstraint: &promptiterengine.BudgetLimit{
+				MaxCost:     1.2,
+				MaxAPICalls: 12,
+			},
+		},
 		StopPolicy: promptiterengine.StopPolicy{
 			TargetScore: &targetScore,
 		},
@@ -1239,16 +1255,23 @@ func TestCloneRunRequestDeepCopiesFields(t *testing.T) {
 	cloned.Validation[0].LossHints[0].Reason = "mutated"
 	cloned.TargetSurfaceIDs[0] = "mutated"
 	*cloned.InitialProfile.Overrides[0].Value.Text = "mutated"
+	cloned.AcceptancePolicy.CriticalCaseIDs[0] = "mutated"
+	cloned.AcceptancePolicy.BudgetConstraint.MaxAPICalls = 99
 	*cloned.StopPolicy.TargetScore = 1.0
 	assert.Equal(t, "train", request.Train[0].EvalSetID)
 	assert.Equal(t, []string{"case_1"}, request.Validation[0].EvalCaseIDs)
 	assert.Equal(t, "business reason", request.Validation[0].LossHints[0].Reason)
 	assert.Equal(t, "candidate#instruction", request.TargetSurfaceIDs[0])
 	assert.Equal(t, "prompt", *request.InitialProfile.Overrides[0].Value.Text)
+	assert.Equal(t, []string{"critical_case"}, request.AcceptancePolicy.CriticalCaseIDs)
+	require.NotNil(t, request.AcceptancePolicy.BudgetConstraint)
+	assert.Equal(t, 12, request.AcceptancePolicy.BudgetConstraint.MaxAPICalls)
 	assert.Equal(t, 0.9, *request.StopPolicy.TargetScore)
 	assert.Equal(t, promptiterengine.BackwardOptions{CaseParallelismEnabled: true, CaseParallelism: 4}, cloned.BackwardOptions)
 	assert.Equal(t, promptiterengine.AggregationOptions{SurfaceParallelismEnabled: true, SurfaceParallelism: 3}, cloned.AggregationOptions)
 	assert.Equal(t, promptiterengine.OptimizerOptions{SurfaceParallelismEnabled: true, SurfaceParallelism: 2}, cloned.OptimizerOptions)
+	assert.Equal(t, 0.1, cloned.AcceptancePolicy.MinScoreGain)
+	assert.True(t, cloned.AcceptancePolicy.NoNewHardFail)
 }
 
 func TestCloneRunRequestNil(t *testing.T) {

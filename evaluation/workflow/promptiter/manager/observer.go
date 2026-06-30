@@ -164,9 +164,10 @@ func (o *observer) applyRoundCompleted(event *engine.Event) error {
 	}
 	round := o.ensureRound(event.Round)
 	round.Acceptance = &engine.AcceptanceDecision{
-		Accepted:   payload.Accepted,
-		ScoreDelta: payload.ScoreDelta,
-		Reason:     payload.AcceptanceReason,
+		Accepted:    payload.Accepted,
+		ScoreDelta:  payload.ScoreDelta,
+		Reason:      payload.AcceptanceReason,
+		GateResults: append([]engine.GateResult(nil), payload.GateResults...),
 	}
 	round.Stop = &engine.StopDecision{
 		ShouldStop: payload.ShouldStop,

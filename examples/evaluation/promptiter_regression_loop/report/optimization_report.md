@@ -23,10 +23,12 @@ Reason: newly failed cases: validation_overfit_guard; regressed critical cases: 
 
 ## Failure Attribution
 
-| Case | Category | Reason |
-| --- | --- | --- |
-| validation_prompt_fixable | final_response_mismatch | final response mismatch |
-| validation_no_effect | tool_arg_error | arguments mismatch: expected V-200 |
+| Eval Set | Case | Category | Reason |
+| --- | --- | --- | --- |
+| promptiter-regression-train | train_prompt_fixable | final_response_mismatch | final response mismatch |
+| promptiter-regression-train | train_tool_argument_error | tool_arg_error | arguments mismatch: expected B-200 |
+| promptiter-regression-validation | validation_prompt_fixable | final_response_mismatch | final response mismatch |
+| promptiter-regression-validation | validation_no_effect | tool_arg_error | arguments mismatch: expected V-200 |
 
 ## Cost / Latency
 

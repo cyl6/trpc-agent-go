@@ -88,17 +88,33 @@
   },
   "failure_attribution_stats": {
     "counts": {
-      "final_response_mismatch": 1,
-      "tool_arg_error": 1
+      "final_response_mismatch": 2,
+      "tool_arg_error": 2
     },
     "attributions": [
       {
+        "eval_set_id": "promptiter-regression-train",
+        "case_id": "train_prompt_fixable",
+        "category": "final_response_mismatch",
+        "reason": "final response mismatch",
+        "evidence": "final_response_exact_json"
+      },
+      {
+        "eval_set_id": "promptiter-regression-train",
+        "case_id": "train_tool_argument_error",
+        "category": "tool_arg_error",
+        "reason": "arguments mismatch: expected B-200",
+        "evidence": "tool_trajectory_avg_score"
+      },
+      {
+        "eval_set_id": "promptiter-regression-validation",
         "case_id": "validation_prompt_fixable",
         "category": "final_response_mismatch",
         "reason": "final response mismatch",
         "evidence": "final_response_exact_json"
       },
       {
+        "eval_set_id": "promptiter-regression-validation",
         "case_id": "validation_no_effect",
         "category": "tool_arg_error",
         "reason": "arguments mismatch: expected V-200",

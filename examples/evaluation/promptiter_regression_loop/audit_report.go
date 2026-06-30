@@ -144,11 +144,11 @@ func BuildMarkdownReport(report OptimizationReport) string {
 			delta.EvalSetID, delta.CaseID, delta.Type, delta.BaselineScore, delta.CandidateScore, delta.ScoreDelta))
 	}
 	md.WriteString("\n## Failure Attribution\n\n")
-	md.WriteString("| Case | Category | Reason |\n")
-	md.WriteString("| --- | --- | --- |\n")
+	md.WriteString("| Eval Set | Case | Category | Reason |\n")
+	md.WriteString("| --- | --- | --- | --- |\n")
 	for _, attribution := range report.FailureAttributionStats.Attributions {
-		md.WriteString(fmt.Sprintf("| %s | %s | %s |\n",
-			attribution.CaseID, attribution.Category, attribution.Reason))
+		md.WriteString(fmt.Sprintf("| %s | %s | %s | %s |\n",
+			attribution.EvalSetID, attribution.CaseID, attribution.Category, attribution.Reason))
 	}
 	md.WriteString("\n## Cost / Latency\n\n")
 	md.WriteString(fmt.Sprintf("- API calls: %d\n", report.CostLatency.TotalAPICalls))

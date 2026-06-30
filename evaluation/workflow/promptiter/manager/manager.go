@@ -237,6 +237,11 @@ func cloneRunRequest(request *engine.RunRequest) *engine.RunRequest {
 	cloned.Validation = cloneEvalSetInputs(request.Validation)
 	cloned.InitialProfile = iprofile.Clone(request.InitialProfile)
 	cloned.TargetSurfaceIDs = append([]string(nil), request.TargetSurfaceIDs...)
+	cloned.AcceptancePolicy.CriticalCaseIDs = append([]string(nil), request.AcceptancePolicy.CriticalCaseIDs...)
+	if request.AcceptancePolicy.BudgetConstraint != nil {
+		budgetConstraint := *request.AcceptancePolicy.BudgetConstraint
+		cloned.AcceptancePolicy.BudgetConstraint = &budgetConstraint
+	}
 	if request.StopPolicy.TargetScore != nil {
 		targetScore := *request.StopPolicy.TargetScore
 		cloned.StopPolicy.TargetScore = &targetScore

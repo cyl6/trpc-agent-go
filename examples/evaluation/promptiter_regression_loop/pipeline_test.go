@@ -30,9 +30,25 @@ func TestRunRegressionLoopWritesOptimizationReports(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, report)
 	assert.Equal(t, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), report.Metadata.GeneratedAt)
+	assert.Equal(t, 3, report.Baseline.TotalCases)
+	assert.Equal(t, 3, report.Candidate.TotalCases)
+	assert.InDelta(t, 0.3333, report.Baseline.OverallScore, 0.0001)
+	assert.InDelta(t, 0.5333, report.Candidate.OverallScore, 0.0001)
 	assert.False(t, report.GateDecision.Accepted)
 	assert.Contains(t, report.GateDecision.Reason, "critical")
+	assert.Equal(t, 1, report.Delta.Counts["newly_passed"])
+	assert.Equal(t, 1, report.Delta.Counts["newly_failed"])
+	assert.Equal(t, 1, report.Delta.Counts["unchanged"])
+	assert.True(t, reportHasGate(report, "ValidationScoreGain", true))
+	assert.True(t, reportHasGate(report, "NoNewHardFail", false))
+	assert.True(t, reportHasGate(report, "CriticalCasePreserve", false))
+	assert.Equal(t, 12, report.CostLatency.TotalAPICalls)
+	require.Len(t, report.Rounds, 1)
+	assert.Len(t, report.Rounds[0].TrainEvalResult.EvalSets[0].Cases, 3)
+	assert.Len(t, report.Rounds[0].ValidationEvalResult.EvalSets[0].Cases, 3)
 	assert.NotEmpty(t, report.FailureAttributionStats.Attributions)
+	assert.True(t, reportHasAttribution(report, "promptiter-regression-train", "train_prompt_fixable"))
+	assert.True(t, reportHasAttribution(report, "promptiter-regression-validation", "validation_prompt_fixable"))
 	assert.FileExists(t, filepath.Join(outputDir, "optimization_report.json"))
 	assert.FileExists(t, filepath.Join(outputDir, "optimization_report.md"))
 
@@ -163,6 +179,27 @@ func reportHasValidationMetric(report *OptimizationReport, metricName string) bo
 					}
 				}
 			}
+		}
+	}
+	return false
+}
+
+func reportHasGate(report *OptimizationReport, gateName string, passed bool) bool {
+	if report.GateDecision == nil {
+		return false
+	}
+	for _, gate := range report.GateDecision.GateResults {
+		if gate.GateName == gateName && gate.Passed == passed {
+			return true
+		}
+	}
+	return false
+}
+
+func reportHasAttribution(report *OptimizationReport, evalSetID, caseID string) bool {
+	for _, attribution := range report.FailureAttributionStats.Attributions {
+		if attribution.EvalSetID == evalSetID && attribution.CaseID == caseID {
+			return true
 		}
 	}
 	return false

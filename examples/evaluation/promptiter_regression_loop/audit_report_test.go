@@ -51,10 +51,11 @@ func TestAuditReportBuilderOutputsRequiredJSONAndMarkdownFields(t *testing.T) {
 		}},
 	}
 	attributions := []FailureAttribution{{
-		CaseID:   "case_1",
-		Category: FailureCategoryFinalResponseMismatch,
-		Reason:   "mismatch",
-		Evidence: "final_response_exact_json",
+		EvalSetID: "validation",
+		CaseID:    "case_1",
+		Category:  FailureCategoryFinalResponseMismatch,
+		Reason:    "mismatch",
+		Evidence:  "final_response_exact_json",
 	}}
 	report := OptimizationReport{
 		Metadata: ReportMetadata{
@@ -90,6 +91,7 @@ func TestAuditReportBuilderOutputsRequiredJSONAndMarkdownFields(t *testing.T) {
 	assert.Contains(t, md, "Optimization Report")
 	assert.Contains(t, md, "critical case regressed")
 	assert.Contains(t, md, "Eval Set")
+	assert.Contains(t, md, "validation")
 	assert.Contains(t, md, "case_1")
 	assert.Contains(t, md, "final_response_mismatch")
 }

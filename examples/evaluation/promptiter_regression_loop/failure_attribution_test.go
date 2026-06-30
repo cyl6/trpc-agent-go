@@ -34,6 +34,7 @@ func TestFailureAttributorClassifiesSixRequiredCategories(t *testing.T) {
 	byCase := map[string]FailureCategory{}
 	for _, attribution := range attributions {
 		byCase[attribution.CaseID] = attribution.Category
+		assert.Equal(t, "validation", attribution.EvalSetID)
 		assert.NotEmpty(t, attribution.Reason)
 		assert.NotEmpty(t, attribution.Evidence)
 	}

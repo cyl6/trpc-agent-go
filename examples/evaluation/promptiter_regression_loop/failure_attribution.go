@@ -29,10 +29,11 @@ const (
 
 // FailureAttribution stores one explainable failure reason.
 type FailureAttribution struct {
-	CaseID   string          `json:"case_id"`
-	Category FailureCategory `json:"category"`
-	Reason   string          `json:"reason"`
-	Evidence string          `json:"evidence"`
+	EvalSetID string          `json:"eval_set_id"`
+	CaseID    string          `json:"case_id"`
+	Category  FailureCategory `json:"category"`
+	Reason    string          `json:"reason"`
+	Evidence  string          `json:"evidence"`
 }
 
 // FailureAttributor classifies failed metrics into challenge categories.
@@ -56,10 +57,11 @@ func (a *FailureAttributor) Attribute(result *promptiterengine.EvaluationResult)
 					continue
 				}
 				attributions = append(attributions, FailureAttribution{
-					CaseID:   caseResult.EvalCaseID,
-					Category: classifyMetric(metric),
-					Reason:   metric.Reason,
-					Evidence: metric.MetricName,
+					EvalSetID: evalSetIDForCase(evalSet.EvalSetID, caseResult),
+					CaseID:    caseResult.EvalCaseID,
+					Category:  classifyMetric(metric),
+					Reason:    metric.Reason,
+					Evidence:  metric.MetricName,
 				})
 			}
 		}
@@ -87,4 +89,11 @@ func classifyMetric(metric promptiterengine.MetricResult) FailureCategory {
 	default:
 		return FailureCategoryFinalResponseMismatch
 	}
+}
+
+func evalSetIDForCase(evalSetID string, caseResult promptiterengine.CaseResult) string {
+	if caseResult.EvalSetID != "" {
+		return caseResult.EvalSetID
+	}
+	return evalSetID
 }
