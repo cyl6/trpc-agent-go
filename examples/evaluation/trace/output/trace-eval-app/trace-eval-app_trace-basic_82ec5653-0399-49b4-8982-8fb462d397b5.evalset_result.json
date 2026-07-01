@@ -1,0 +1,49 @@
+{
+  "evalSetResultId": "trace-eval-app_trace-basic_82ec5653-0399-49b4-8982-8fb462d397b5",
+  "evalSetResultName": "trace-eval-app_trace-basic_82ec5653-0399-49b4-8982-8fb462d397b5",
+  "evalSetId": "trace-basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "trace-basic",
+      "evalId": "trace_calc_add",
+      "runId": 1,
+      "finalEvalStatus": "failed",
+      "errorMessage": "run evaluation for metric llm_rubric_response: judge response: response error: Post \"https://api.openai.com/v1/chat/completions\": EOF",
+      "sessionId": "fc902679-ee9a-4516-8746-4e7b123f05d7",
+      "userId": "demo-user"
+    }
+  ],
+  "summary": {
+    "overallStatus": "failed",
+    "numRuns": 1,
+    "runStatusCounts": {
+      "failed": 1
+    },
+    "runSummaries": [
+      {
+        "runId": 1,
+        "overallStatus": "failed",
+        "caseStatusCounts": {
+          "failed": 1
+        }
+      }
+    ],
+    "evalCaseSummaries": [
+      {
+        "evalId": "trace_calc_add",
+        "overallStatus": "failed",
+        "runStatusCounts": {
+          "failed": 1
+        },
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "failed",
+            "errorMessage": "run evaluation for metric llm_rubric_response: judge response: response error: Post \"https://api.openai.com/v1/chat/completions\": EOF"
+          }
+        ]
+      }
+    ]
+  },
+  "creationTimestamp": 1782630061.6265755
+}

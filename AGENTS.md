@@ -1,14 +1,15 @@
 # AGENTS.md
 
-## Cursor Cloud specific instructions
+## specific instructions
 
 ### Project overview
 
 tRPC-Agent-Go is a Go multi-module monorepo (library/framework) for building AI agent systems. It is **not** a standalone application — there is no single `main.go` to run. The root module path is `trpc.group/trpc-go/trpc-agent-go`.
 
-### Go version
+### Remote
 
-The root `go.mod` requires Go 1.21. The environment has Go 1.22+ pre-installed, which is compatible. Some sub-modules (e.g. under `test/`) require Go 1.24+; `go mod download` handles this automatically via toolchain directives.
+- `origin` → `https://github.com/cyl6/trpc-agent-go.git` 
+- Current branch: `main`
 
 ### Common commands
 
@@ -22,10 +23,11 @@ The root `go.mod` requires Go 1.21. The environment has Go 1.22+ pre-installed, 
 | goimports check | `goimports -l .` | |
 | All sub-module tests (CI-style) | `bash .github/scripts/run-go-tests.sh` | Runs tests across ~80 modules excluding examples/docs/test |
 | Check example builds | `bash .github/scripts/check-examples.sh` | |
+| Trace eval example (no API key) | `cd examples/evaluation/trace && go run .` | Trace mode skips LLM calls; verified runnable without `OPENAI_API_KEY` |
 
 ### Non-obvious caveats
 
-- **GOPATH/bin must be on PATH** for `golangci-lint` and `goimports` to work. The update script handles installation, and `~/.bashrc` exports the path. If a tool is missing, run: `export PATH="$PATH:$(go env GOPATH)/bin"`.
+- **`/home/cyl/.local/bin` and `$(go env GOPATH)/bin` must be on PATH** for `golangci-lint` and `goimports` to be found. The install block in "Local environment setup" already exports both. If a tool is missing in a new shell, run `source ~/.bashrc`.
 - **No external API keys needed for tests.** The entire test suite uses mocks. API keys (e.g. `OPENAI_API_KEY`) are only needed to run the examples under `examples/`.
 - **Multi-module monorepo:** There are ~80 `go.mod` files. Running `go test ./...` from the repo root only tests the root module. To test all modules, use the CI script `.github/scripts/run-go-tests.sh`.
 - **SQLite CGO dependency:** The root module depends on `github.com/mattn/go-sqlite3`, which requires CGO. Ensure `CGO_ENABLED=1` (the default) and a C compiler is available.

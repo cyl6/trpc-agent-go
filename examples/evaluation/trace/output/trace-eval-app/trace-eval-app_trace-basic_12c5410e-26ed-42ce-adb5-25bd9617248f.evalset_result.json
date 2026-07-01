@@ -1,0 +1,49 @@
+{
+  "evalSetResultId": "trace-eval-app_trace-basic_12c5410e-26ed-42ce-adb5-25bd9617248f",
+  "evalSetResultName": "trace-eval-app_trace-basic_12c5410e-26ed-42ce-adb5-25bd9617248f",
+  "evalSetId": "trace-basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "trace-basic",
+      "evalId": "trace_calc_add",
+      "runId": 1,
+      "finalEvalStatus": "failed",
+      "errorMessage": "run evaluation for metric llm_rubric_response: judge response: response error: POST \"https://api.openai.com/v1/chat/completions\": 401 Unauthorized {\n        \"message\": \"You didn't provide an API key. You need to provide your API key in an Authorization header using Bearer auth (i.e. Authorization: Bearer YOUR_KEY), or as the password field (with blank username) if you're accessing the API from your browser and are prompted for a username and password. You can obtain an API key from https://platform.openai.com/account/api-keys.\",\n        \"type\": \"invalid_request_error\",\n        \"param\": null,\n        \"code\": null\n    }",
+      "sessionId": "78910556-1d80-40be-9f51-619affdd9809",
+      "userId": "demo-user"
+    }
+  ],
+  "summary": {
+    "overallStatus": "failed",
+    "numRuns": 1,
+    "runStatusCounts": {
+      "failed": 1
+    },
+    "runSummaries": [
+      {
+        "runId": 1,
+        "overallStatus": "failed",
+        "caseStatusCounts": {
+          "failed": 1
+        }
+      }
+    ],
+    "evalCaseSummaries": [
+      {
+        "evalId": "trace_calc_add",
+        "overallStatus": "failed",
+        "runStatusCounts": {
+          "failed": 1
+        },
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "failed",
+            "errorMessage": "run evaluation for metric llm_rubric_response: judge response: response error: POST \"https://api.openai.com/v1/chat/completions\": 401 Unauthorized {\n        \"message\": \"You didn't provide an API key. You need to provide your API key in an Authorization header using Bearer auth (i.e. Authorization: Bearer YOUR_KEY), or as the password field (with blank username) if you're accessing the API from your browser and are prompted for a username and password. You can obtain an API key from https://platform.openai.com/account/api-keys.\",\n        \"type\": \"invalid_request_error\",\n        \"param\": null,\n        \"code\": null\n    }"
+          }
+        ]
+      }
+    ]
+  },
+  "creationTimestamp": 1782627659.9369671
+}
