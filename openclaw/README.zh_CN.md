@@ -272,23 +272,26 @@ tools:
   # 可选：覆盖内置的 OpenClaw tooling guidance 提示词。
   # 不设置时使用内置默认值，设为 "" 可禁用它。
   openclaw_tooling_guidance: ""
-  # 可选：当直接工具面超过 auto 阈值时，先只向父模型暴露轻量
-  # tool_search + dynamic_agent 入口。默认模式为 auto；设置
-  # defer_to_dynamic_agent_mode: on 可强制开启，设置 off 可关闭。
-  defer_to_dynamic_agent_mode: auto # off|on|auto
+  # 可选：先只向父模型暴露轻量 tool_search + dynamic_agent 入口。
+  # 默认模式为 off，会把配置的工具直接暴露给父 agent。设置 auto 时
+  # 仅当直接工具面超过阈值才 defer，设置 on 可强制开启。
+  defer_to_dynamic_agent_mode: off # off|on|auto
   defer_to_dynamic_agent_threshold_chars: 4000
   # 可选：是否保留默认的父 agent 直连工具。对 token 敏感的 profile 可
   # 设为 false，仅暴露 tool_search/dynamic_agent 和 defer_direct_tools。
   # defer_default_direct_tools: true
   # 可选：保留少量父 agent 可直接调用的工具。
   # defer_direct_tools: ["exec_command"]
+  # 可选：host exec_command 未传 timeout_sec 时使用的默认超时。
+  # 留空则沿用内置 host exec 默认值。
+  # host_exec_default_timeout: "60s"
   # 可选：配置 fenced-code 执行，但不暴露 workspace_exec。
   code_executor:
     type: "sandbox" # sandbox；留空或不设置时继承 enable_local_exec
     auto_execute_code_blocks: true
     sandbox:
       workspace_root: "" # 默认 state_dir/sandbox
-      backend: "auto" # auto|linux-bubblewrap
+      backend: "auto" # auto|linux-bubblewrap|macos-sandbox-exec
       profile: "workspace_write" # workspace_write|read_only|disabled
       network: "restricted" # restricted|enabled
       default_timeout: "30s"

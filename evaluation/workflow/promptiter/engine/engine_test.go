@@ -35,9 +35,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/backwarder"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/optimizer"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/model/provider"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -134,10 +134,6 @@ type scriptedEvalOutcome struct {
 	executionTrace    *atrace.Trace
 }
 
-type providerBackedTestModel struct {
-	name string
-}
-
 type fakeAgentEvaluator struct {
 	evaluate func(ctx context.Context, evalSetID string, opt ...evaluation.Option) (*evaluation.EvaluationResult, error)
 }
@@ -155,19 +151,6 @@ func (f *fakeAgentEvaluator) Evaluate(
 
 func (f *fakeAgentEvaluator) Close() error {
 	return nil
-}
-
-func (m *providerBackedTestModel) GenerateContent(
-	context.Context,
-	*model.Request,
-) (<-chan *model.Response, error) {
-	ch := make(chan *model.Response)
-	close(ch)
-	return ch, nil
-}
-
-func (m *providerBackedTestModel) Info() model.Info {
-	return model.Info{Name: m.name}
 }
 
 type scriptedEvalService struct {
@@ -202,8 +185,8 @@ func (s *scriptedEvalService) Inference(
 		if instruction, ok := patch.Instruction(); ok {
 			profileValue = instruction
 		}
-		if profileValue == "" {
-			if declarations, ok := patch.ToolDeclarations(); ok && len(declarations) > 0 {
+		if declarations, ok := patch.ToolDeclarations(); ok && len(declarations) > 0 {
+			if profileValue == "" || declarations[0].Description != "bad" {
 				profileValue = "tool:" + declarations[0].Description
 			}
 		}
@@ -411,15 +394,31 @@ func TestDescribeUsesStructureSnapshot(t *testing.T) {
 	structure := testStructureSnapshot(t)
 	engineInstance, err := New(
 		context.Background(),
-		testTargetAgent(),
-		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
-		&fakeBackwarder{},
-		&fakeAggregator{},
-		&fakeOptimizer{},
+		WithAgentEvaluator(newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome))),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(testTargetAgent()),
 	)
 	assert.NoError(t, err)
 	result, err := engineInstance.Describe(context.Background())
 	assert.NoError(t, err)
+	assert.Equal(t, structure, result)
+}
+
+func TestDescribeUsesInjectedStructure(t *testing.T) {
+	structure := testStructureSnapshot(t)
+	engineInstance, err := New(
+		context.Background(),
+		WithAgentEvaluator(newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome))),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithStructure(structure),
+	)
+	require.NoError(t, err)
+	result, err := engineInstance.Describe(context.Background())
+	require.NoError(t, err)
 	assert.Equal(t, structure, result)
 }
 
@@ -483,24 +482,25 @@ func TestRunAcceptsFirstRoundAndStopsAfterRejectedNextRound(t *testing.T) {
 	evalService := newScriptedEvalService(scriptedOutcome)
 	engineInstance, err := New(
 		context.Background(),
-		testTargetAgent(),
-		newTestAgentEvaluator(t, evalService),
-		backward,
-		aggregatorInstance,
-		optimizerInstance,
+		WithAgentEvaluator(newTestAgentEvaluator(t, evalService)),
+		WithBackwarder(backward),
+		WithAggregator(aggregatorInstance),
+		WithOptimizer(optimizerInstance),
+		WithAgent(testTargetAgent()),
 	)
 	assert.NoError(t, err)
 	result, err := engineInstance.Run(context.Background(), &RunRequest{
 		Train:          testEvalSetInputs("train"),
 		Validation:     testEvalSetInputs("validation"),
-		InitialProfile: nil,
+		InitialProfile: runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
 		AcceptancePolicy: AcceptancePolicy{
 			MinScoreGain: 0.1,
 		},
 		StopPolicy: StopPolicy{
 			MaxRoundsWithoutAcceptance: 1,
 		},
-		MaxRounds: 5,
+		MaxRounds:        5,
+		TargetSurfaceIDs: []string{testSurfaceID},
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, []string{
@@ -576,16 +576,17 @@ func TestRunAllowsToolSurfaceInTraceWhenTargetingInstruction(t *testing.T) {
 	})
 	engineInstance, err := New(
 		context.Background(),
-		testTargetAgentWithToolSurface(),
-		newTestAgentEvaluator(t, evalService),
-		backward,
-		aggregatorInstance,
-		optimizerInstance,
+		WithAgentEvaluator(newTestAgentEvaluator(t, evalService)),
+		WithBackwarder(backward),
+		WithAggregator(aggregatorInstance),
+		WithOptimizer(optimizerInstance),
+		WithAgent(testTargetAgentWithToolSurface()),
 	)
 	assert.NoError(t, err)
 	result, err := engineInstance.Run(context.Background(), &RunRequest{
 		Train:            testEvalSetInputs("train"),
 		Validation:       testEvalSetInputs("validation"),
+		InitialProfile:   runtimeProfileFromSnapshot(t, testStructureSnapshotWithToolSurface(t)),
 		MaxRounds:        1,
 		TargetSurfaceIDs: []string{testSurfaceID},
 		AcceptancePolicy: AcceptancePolicy{
@@ -667,16 +668,17 @@ func TestRunOptimizesTargetedToolSurface(t *testing.T) {
 	})
 	engineInstance, err := New(
 		context.Background(),
-		testTargetAgentWithToolSurface(),
-		newTestAgentEvaluator(t, evalService),
-		backward,
-		aggregatorInstance,
-		optimizerInstance,
+		WithAgentEvaluator(newTestAgentEvaluator(t, evalService)),
+		WithBackwarder(backward),
+		WithAggregator(aggregatorInstance),
+		WithOptimizer(optimizerInstance),
+		WithAgent(testTargetAgentWithToolSurface()),
 	)
 	assert.NoError(t, err)
 	result, err := engineInstance.Run(context.Background(), &RunRequest{
 		Train:            testEvalSetInputs("train"),
 		Validation:       testEvalSetInputs("validation"),
+		InitialProfile:   runtimeProfileFromSnapshot(t, testStructureSnapshotWithToolSurface(t)),
 		MaxRounds:        1,
 		TargetSurfaceIDs: []string{testToolSurfaceID},
 		AcceptancePolicy: AcceptancePolicy{
@@ -740,24 +742,26 @@ func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 	evalService := newScriptedEvalService(scriptedOutcome)
 	engineInstance, err := New(
 		context.Background(),
-		testTargetAgent(),
-		newTestAgentEvaluator(t, evalService),
-		backward,
-		aggregatorInstance,
-		optimizerInstance,
+		WithAgentEvaluator(newTestAgentEvaluator(t, evalService)),
+		WithBackwarder(backward),
+		WithAggregator(aggregatorInstance),
+		WithOptimizer(optimizerInstance),
+		WithAgent(testTargetAgent()),
 	)
 	assert.NoError(t, err)
 	var observedEvents []Event
 	result, err := engineInstance.Run(context.Background(), &RunRequest{
-		Train:      testEvalSetInputs("train"),
-		Validation: testEvalSetInputs("validation"),
+		Train:          testEvalSetInputs("train"),
+		Validation:     testEvalSetInputs("validation"),
+		InitialProfile: runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
 		AcceptancePolicy: AcceptancePolicy{
 			MinScoreGain: 0.1,
 		},
 		StopPolicy: StopPolicy{
 			MaxRoundsWithoutAcceptance: 1,
 		},
-		MaxRounds: 1,
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{testSurfaceID},
 	}, WithObserver(func(ctx context.Context, event *Event) error {
 		_ = ctx
 		if assert.NotNil(t, event) {
@@ -767,41 +771,38 @@ func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 	}))
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
-	require.Len(t, observedEvents, 11)
-	assert.Equal(t, EventKindStructureSnapshot, observedEvents[0].Kind)
+	require.Len(t, observedEvents, 10)
+	assert.Equal(t, EventKindBaselineValidation, observedEvents[0].Kind)
 	assert.Zero(t, observedEvents[0].Round)
-	assert.IsType(t, &astructure.Snapshot{}, observedEvents[0].Payload)
-	assert.Equal(t, EventKindBaselineValidation, observedEvents[1].Kind)
-	assert.Zero(t, observedEvents[1].Round)
-	assert.IsType(t, &EvaluationResult{}, observedEvents[1].Payload)
-	assert.Equal(t, EventKindRoundStarted, observedEvents[2].Kind)
+	assert.IsType(t, &EvaluationResult{}, observedEvents[0].Payload)
+	assert.Equal(t, EventKindRoundStarted, observedEvents[1].Kind)
+	assert.Equal(t, 1, observedEvents[1].Round)
+	assert.Nil(t, observedEvents[1].Payload)
+	assert.Equal(t, EventKindRoundTrainEvaluation, observedEvents[2].Kind)
 	assert.Equal(t, 1, observedEvents[2].Round)
-	assert.Nil(t, observedEvents[2].Payload)
-	assert.Equal(t, EventKindRoundTrainEvaluation, observedEvents[3].Kind)
+	assert.IsType(t, &EvaluationResult{}, observedEvents[2].Payload)
+	assert.Equal(t, EventKindRoundLosses, observedEvents[3].Kind)
 	assert.Equal(t, 1, observedEvents[3].Round)
-	assert.IsType(t, &EvaluationResult{}, observedEvents[3].Payload)
-	assert.Equal(t, EventKindRoundLosses, observedEvents[4].Kind)
+	assert.IsType(t, []promptiter.CaseLoss{}, observedEvents[3].Payload)
+	assert.Equal(t, EventKindRoundBackward, observedEvents[4].Kind)
 	assert.Equal(t, 1, observedEvents[4].Round)
-	assert.IsType(t, []promptiter.CaseLoss{}, observedEvents[4].Payload)
-	assert.Equal(t, EventKindRoundBackward, observedEvents[5].Kind)
+	assert.IsType(t, &BackwardResult{}, observedEvents[4].Payload)
+	assert.Equal(t, EventKindRoundAggregation, observedEvents[5].Kind)
 	assert.Equal(t, 1, observedEvents[5].Round)
-	assert.IsType(t, &BackwardResult{}, observedEvents[5].Payload)
-	assert.Equal(t, EventKindRoundAggregation, observedEvents[6].Kind)
+	assert.IsType(t, &AggregationResult{}, observedEvents[5].Payload)
+	assert.Equal(t, EventKindRoundPatchSet, observedEvents[6].Kind)
 	assert.Equal(t, 1, observedEvents[6].Round)
-	assert.IsType(t, &AggregationResult{}, observedEvents[6].Payload)
-	assert.Equal(t, EventKindRoundPatchSet, observedEvents[7].Kind)
+	assert.IsType(t, &promptiter.PatchSet{}, observedEvents[6].Payload)
+	assert.Equal(t, EventKindRoundOutputProfile, observedEvents[7].Kind)
 	assert.Equal(t, 1, observedEvents[7].Round)
-	assert.IsType(t, &promptiter.PatchSet{}, observedEvents[7].Payload)
-	assert.Equal(t, EventKindRoundOutputProfile, observedEvents[8].Kind)
+	assert.IsType(t, &promptiter.Profile{}, observedEvents[7].Payload)
+	assert.Equal(t, EventKindRoundValidation, observedEvents[8].Kind)
 	assert.Equal(t, 1, observedEvents[8].Round)
-	assert.IsType(t, &promptiter.Profile{}, observedEvents[8].Payload)
-	assert.Equal(t, EventKindRoundValidation, observedEvents[9].Kind)
+	assert.IsType(t, &EvaluationResult{}, observedEvents[8].Payload)
+	assert.Equal(t, EventKindRoundCompleted, observedEvents[9].Kind)
 	assert.Equal(t, 1, observedEvents[9].Round)
-	assert.IsType(t, &EvaluationResult{}, observedEvents[9].Payload)
-	assert.Equal(t, EventKindRoundCompleted, observedEvents[10].Kind)
-	assert.Equal(t, 1, observedEvents[10].Round)
-	assert.IsType(t, &RoundCompleted{}, observedEvents[10].Payload)
-	completedPayload, ok := observedEvents[10].Payload.(*RoundCompleted)
+	assert.IsType(t, &RoundCompleted{}, observedEvents[9].Payload)
+	completedPayload, ok := observedEvents[9].Payload.(*RoundCompleted)
 	require.True(t, ok)
 	require.Len(t, completedPayload.GateResults, 1)
 	assert.Equal(t, "ValidationScoreGain", completedPayload.GateResults[0].GateName)
@@ -823,11 +824,11 @@ func TestRunPassesEvalCaseIDsToTrainAndValidationInputs(t *testing.T) {
 		t.Helper()
 		engineInstance, err := New(
 			context.Background(),
-			testTargetAgent(),
-			newTestAgentEvaluator(t, evalService),
-			&fakeBackwarder{},
-			&fakeAggregator{},
-			&fakeOptimizer{},
+			WithAgentEvaluator(newTestAgentEvaluator(t, evalService)),
+			WithBackwarder(&fakeBackwarder{}),
+			WithAggregator(&fakeAggregator{}),
+			WithOptimizer(&fakeOptimizer{}),
+			WithAgent(testTargetAgent()),
 		)
 		require.NoError(t, err)
 		return engineInstance
@@ -848,7 +849,9 @@ func TestRunPassesEvalCaseIDsToTrainAndValidationInputs(t *testing.T) {
 					EvalCaseIDs: []string{"validation_case_1"},
 				},
 			},
-			MaxRounds: 1,
+			InitialProfile:   runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
+			MaxRounds:        1,
+			TargetSurfaceIDs: []string{testSurfaceID},
 		})
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -869,7 +872,9 @@ func TestRunPassesEvalCaseIDsToTrainAndValidationInputs(t *testing.T) {
 					EvalSetID: "validation",
 				},
 			},
-			MaxRounds: 1,
+			InitialProfile:   runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
+			MaxRounds:        1,
+			TargetSurfaceIDs: []string{testSurfaceID},
 		})
 		var noFilter []string
 		require.NoError(t, err)
@@ -893,7 +898,9 @@ func TestRunPassesEvalCaseIDsToTrainAndValidationInputs(t *testing.T) {
 					EvalCaseIDs: []string{},
 				},
 			},
-			MaxRounds: 1,
+			InitialProfile:   runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
+			MaxRounds:        1,
+			TargetSurfaceIDs: []string{testSurfaceID},
 		})
 		var noFilter []string
 		require.NoError(t, err)
@@ -951,31 +958,33 @@ func TestRunCompilesProfileIntoEvaluationRunOptions(t *testing.T) {
 	evalService := newScriptedEvalService(scriptedOutcome)
 	engineInstance, err := New(
 		context.Background(),
-		testTargetAgent(),
-		newTestAgentEvaluator(t, evalService),
-		backward,
-		aggregatorInstance,
-		optimizerInstance,
+		WithAgentEvaluator(newTestAgentEvaluator(t, evalService)),
+		WithBackwarder(backward),
+		WithAggregator(aggregatorInstance),
+		WithOptimizer(optimizerInstance),
+		WithAgent(testTargetAgent()),
 	)
 	assert.NoError(t, err)
 	result, err := engineInstance.Run(context.Background(), &RunRequest{
-		Train:      testEvalSetInputs("train"),
-		Validation: testEvalSetInputs("validation"),
+		Train:          testEvalSetInputs("train"),
+		Validation:     testEvalSetInputs("validation"),
+		InitialProfile: runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
 		AcceptancePolicy: AcceptancePolicy{
 			MinScoreGain: 0.1,
 		},
-		MaxRounds: 1,
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{testSurfaceID},
 	})
 	assert.NoError(t, err)
 	assert.Len(t, result.Rounds, 1)
 	assert.Len(t, evalService.runOptions, 3)
 	assert.Empty(t, evalService.runOptions[0].Instruction)
 	assert.Empty(t, evalService.runOptions[1].Instruction)
-	_, ok := surfacepatch.PatchForNode(evalService.runOptions[0].CustomAgentConfigs, "node_1")
+	patch, ok := surfacepatch.PatchForNode(evalService.runOptions[0].CustomAgentConfigs, "node_1")
 	assert.False(t, ok)
-	_, ok = surfacepatch.PatchForNode(evalService.runOptions[1].CustomAgentConfigs, "node_1")
+	patch, ok = surfacepatch.PatchForNode(evalService.runOptions[1].CustomAgentConfigs, "node_1")
 	assert.False(t, ok)
-	patch, ok := surfacepatch.PatchForNode(evalService.runOptions[2].CustomAgentConfigs, "node_1")
+	patch, ok = surfacepatch.PatchForNode(evalService.runOptions[2].CustomAgentConfigs, "node_1")
 	assert.True(t, ok)
 	instruction, ok := patch.Instruction()
 	assert.True(t, ok)
@@ -988,7 +997,7 @@ func TestRunCompilesProfileIntoEvaluationRunOptions(t *testing.T) {
 }
 
 func TestCompileProfileRunOptionsUsesNodeSurfacePatchForNonEntryNode(t *testing.T) {
-	structure, err := newStructureState(&astructure.Snapshot{
+	structure, err := profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		EntryNodeID: "entry",
 		Nodes: []astructure.Node{
@@ -1015,21 +1024,27 @@ func TestCompileProfileRunOptionsUsesNodeSurfacePatchForNonEntryNode(t *testing.
 		},
 	})
 	assert.NoError(t, err)
-	runOptions, err := compileProfileRunOptions(structure, &promptiter.Profile{
-		StructureID: "structure_1",
+	profile := &promptiter.Profile{
 		Overrides: []promptiter.SurfaceOverride{
 			{
 				SurfaceID: "reviewer#instruction",
-				Value: astructure.SurfaceValue{
-					Text: stringPtr("patched review prompt"),
-				},
+				Value:     astructure.SurfaceValue{Text: stringPtr("patched review prompt")},
 			},
 		},
-	})
+	}
+	runOptions, err := compileProfileRunOptions(structure, profile)
 	assert.NoError(t, err)
 	opts := agent.NewRunOptions(runOptions...)
 	assert.Empty(t, opts.Instruction)
 	assert.True(t, opts.ExecutionTraceEnabled)
+	attachedProfile := profilecompiler.ProfileFromRunOptions(opts)
+	require.NotNil(t, attachedProfile)
+	require.Len(t, attachedProfile.Overrides, 1)
+	assert.Equal(t, "reviewer#instruction", attachedProfile.Overrides[0].SurfaceID)
+	assert.Equal(t, "reviewer", attachedProfile.Overrides[0].NodeID)
+	assert.Equal(t, astructure.SurfaceTypeInstruction, attachedProfile.Overrides[0].Type)
+	require.NotNil(t, attachedProfile.Overrides[0].Value.Text)
+	assert.Equal(t, "patched review prompt", *attachedProfile.Overrides[0].Value.Text)
 	patch, ok := surfacepatch.PatchForNode(opts.CustomAgentConfigs, "reviewer")
 	assert.True(t, ok)
 	instruction, ok := patch.Instruction()
@@ -1037,34 +1052,21 @@ func TestCompileProfileRunOptionsUsesNodeSurfacePatchForNonEntryNode(t *testing.
 	assert.Equal(t, "patched review prompt", instruction)
 }
 
-func TestCompileProfileRunOptionsUsesModelSurfacePatch(t *testing.T) {
-	const providerName = "promptiter_test_provider"
-	var capturedOptions provider.Options
-	provider.Register(providerName, func(opts *provider.Options) (model.Model, error) {
-		capturedOptions = *opts
-		return &providerBackedTestModel{name: opts.ModelName}, nil
-	})
-	structure, err := newStructureState(&astructure.Snapshot{
+func TestCompileProfileRunOptionsRejectsModelSurface(t *testing.T) {
+	structure, structureErr := profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		EntryNodeID: "entry",
-		Nodes: []astructure.Node{
-			{NodeID: "entry", Kind: astructure.NodeKindLLM, Name: "entry"},
-		},
+		Nodes:       []astructure.Node{{NodeID: "entry", Kind: astructure.NodeKindLLM, Name: "entry"}},
 		Surfaces: []astructure.Surface{
 			{
 				SurfaceID: "entry#model",
 				NodeID:    "entry",
 				Type:      astructure.SurfaceTypeModel,
-				Value: astructure.SurfaceValue{
-					Model: &astructure.ModelRef{
-						Provider: providerName,
-						Name:     "base-model",
-					},
-				},
+				Value:     astructure.SurfaceValue{Model: &astructure.ModelRef{Name: "base-model"}},
 			},
 		},
 	})
-	assert.NoError(t, err)
+	require.NoError(t, structureErr)
 	runOptions, err := compileProfileRunOptions(structure, &promptiter.Profile{
 		StructureID: "structure_1",
 		Overrides: []promptiter.SurfaceOverride{
@@ -1072,32 +1074,18 @@ func TestCompileProfileRunOptionsUsesModelSurfacePatch(t *testing.T) {
 				SurfaceID: "entry#model",
 				Value: astructure.SurfaceValue{
 					Model: &astructure.ModelRef{
-						Provider: providerName,
-						Name:     "patched-model",
-						BaseURL:  "https://api.example.com/v1",
-						APIKey:   "secret",
-						Headers:  map[string]string{"X-Test": "1"},
+						Name: "base-model",
 					},
 				},
 			},
 		},
 	})
-	assert.NoError(t, err)
-	opts := agent.NewRunOptions(runOptions...)
-	patch, ok := surfacepatch.PatchForNode(opts.CustomAgentConfigs, "entry")
-	assert.True(t, ok)
-	modelValue, ok := patch.Model()
-	assert.True(t, ok)
-	assert.Equal(t, "patched-model", modelValue.Info().Name)
-	assert.Equal(t, providerName, capturedOptions.ProviderName)
-	assert.Equal(t, "patched-model", capturedOptions.ModelName)
-	assert.Equal(t, "https://api.example.com/v1", capturedOptions.BaseURL)
-	assert.Equal(t, "secret", capturedOptions.APIKey)
-	assert.Equal(t, map[string]string{"X-Test": "1"}, capturedOptions.Headers)
+	assert.Nil(t, runOptions)
+	assert.EqualError(t, err, `profile override references unknown surface id "entry#model"`)
 }
 
 func TestCompileProfileRunOptionsUsesToolDeclarationPatch(t *testing.T) {
-	structure, err := newStructureState(&astructure.Snapshot{
+	structure, err := profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		EntryNodeID: "entry",
 		Nodes: []astructure.Node{
@@ -1144,8 +1132,7 @@ func TestCompileProfileRunOptionsUsesToolDeclarationPatch(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	runOptions, err := compileProfileRunOptions(structure, &promptiter.Profile{
-		StructureID: "structure_1",
+	profile := &promptiter.Profile{
 		Overrides: []promptiter.SurfaceOverride{
 			{
 				SurfaceID: "entry#tool.search",
@@ -1154,12 +1141,31 @@ func TestCompileProfileRunOptionsUsesToolDeclarationPatch(t *testing.T) {
 						{
 							ID:          "search",
 							Description: "patched search",
+							InputSchema: &tool.Schema{
+								Type:        "object",
+								Description: "base input",
+								Required:    []string{"query"},
+								Properties: map[string]*tool.Schema{
+									"query": {Type: "string", Description: "base query"},
+								},
+							},
+							OutputSchema: &tool.Schema{
+								Type: "object",
+								Properties: map[string]*tool.Schema{
+									"items": {
+										Type:        "array",
+										Description: "base items",
+										Items:       &tool.Schema{Type: "string", Description: "base item"},
+									},
+								},
+							},
 						},
 					},
 				},
 			},
 		},
-	})
+	}
+	runOptions, err := compileProfileRunOptions(structure, profile)
 	require.NoError(t, err)
 	opts := agent.NewRunOptions(runOptions...)
 	patch, ok := surfacepatch.PatchForNode(opts.CustomAgentConfigs, "entry")
@@ -1176,7 +1182,7 @@ func TestCompileProfileRunOptionsUsesToolDeclarationPatch(t *testing.T) {
 }
 
 func TestCompileProfileRunOptionsAggregatesToolDeclarationPatches(t *testing.T) {
-	structure, err := newStructureState(&astructure.Snapshot{
+	structure, err := profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		EntryNodeID: "entry",
 		Nodes: []astructure.Node{
@@ -1208,8 +1214,7 @@ func TestCompileProfileRunOptionsAggregatesToolDeclarationPatches(t *testing.T) 
 		},
 	})
 	require.NoError(t, err)
-	runOptions, err := compileProfileRunOptions(structure, &promptiter.Profile{
-		StructureID: "structure_1",
+	profile := &promptiter.Profile{
 		Overrides: []promptiter.SurfaceOverride{
 			{
 				SurfaceID: "entry#tool.search",
@@ -1224,7 +1229,8 @@ func TestCompileProfileRunOptionsAggregatesToolDeclarationPatches(t *testing.T) 
 				},
 			},
 		},
-	})
+	}
+	runOptions, err := compileProfileRunOptions(structure, profile)
 	require.NoError(t, err)
 	opts := agent.NewRunOptions(runOptions...)
 	patch, ok := surfacepatch.PatchForNode(opts.CustomAgentConfigs, "entry")
@@ -1238,8 +1244,8 @@ func TestCompileProfileRunOptionsAggregatesToolDeclarationPatches(t *testing.T) 
 	assert.Equal(t, "patched search", declarations[1].Description)
 }
 
-func TestCompileProfileRunOptionsRejectsToolSchemaShapeChange(t *testing.T) {
-	structure, err := newStructureState(&astructure.Snapshot{
+func TestApplyPatchSetRejectsToolSchemaShapeChange(t *testing.T) {
+	structure, err := profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		EntryNodeID: "entry",
 		Nodes: []astructure.Node{
@@ -1274,9 +1280,9 @@ func TestCompileProfileRunOptionsRejectsToolSchemaShapeChange(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	runOptions, err := compileProfileRunOptions(structure, &promptiter.Profile{
-		StructureID: "structure_1",
-		Overrides: []promptiter.SurfaceOverride{
+	profile := runtimeProfileFromStructure(t, structure)
+	updated, err := applyPatchSet(structure, profile, &promptiter.PatchSet{
+		Patches: []promptiter.SurfacePatch{
 			{
 				SurfaceID: "entry#tool.search",
 				Value: astructure.SurfaceValue{
@@ -1296,56 +1302,17 @@ func TestCompileProfileRunOptionsRejectsToolSchemaShapeChange(t *testing.T) {
 			},
 		},
 	})
-	assert.Nil(t, runOptions)
+	assert.Nil(t, updated)
 	assert.ErrorContains(t, err, `tool "search" input schema changed`)
 }
 
-func TestCompileProfileRunOptionsRejectsEmptyModelProvider(t *testing.T) {
-	structure, err := newStructureState(&astructure.Snapshot{
-		StructureID: "structure_1",
-		EntryNodeID: "entry",
-		Nodes: []astructure.Node{
-			{NodeID: "entry", Kind: astructure.NodeKindLLM, Name: "entry"},
-		},
-		Surfaces: []astructure.Surface{
-			{
-				SurfaceID: "entry#model",
-				NodeID:    "entry",
-				Type:      astructure.SurfaceTypeModel,
-				Value: astructure.SurfaceValue{
-					Model: &astructure.ModelRef{Name: "base-model"},
-				},
-			},
-		},
-	})
-	assert.NoError(t, err)
-	runOptions, err := compileProfileRunOptions(structure, &promptiter.Profile{
-		StructureID: "structure_1",
-		Overrides: []promptiter.SurfaceOverride{
-			{
-				SurfaceID: "entry#model",
-				Value: astructure.SurfaceValue{
-					Model: &astructure.ModelRef{Name: "patched-model"},
-				},
-			},
-		},
-	})
-	assert.ErrorContains(t, err, "model provider is empty")
-	assert.Nil(t, runOptions)
-}
-
 func TestEvaluateValidatesRequests(t *testing.T) {
-	structure, err := newStructureState(testStructureSnapshot(t))
-	require.NoError(t, err)
 	engineInstance := &engine{agentEvaluator: &fakeAgentEvaluator{}}
+	structure, err := profilecompiler.NewStructure(testStructureSnapshot(t))
+	require.NoError(t, err)
 	result, runErr := engineInstance.evaluate(context.Background(), structure, nil)
 	assert.Nil(t, result)
 	assert.EqualError(t, runErr, "evaluation request is nil")
-	result, runErr = engineInstance.evaluate(context.Background(), nil, &EvaluationRequest{
-		EvalSets: []EvalSetInput{{EvalSetID: "validation"}},
-	})
-	assert.Nil(t, result)
-	assert.EqualError(t, runErr, "structure state is nil")
 	result, runErr = engineInstance.evaluate(context.Background(), structure, &EvaluationRequest{})
 	assert.Nil(t, result)
 	assert.EqualError(t, runErr, "evaluation sets are empty")
@@ -1364,11 +1331,11 @@ func TestEvaluateValidatesRequests(t *testing.T) {
 }
 
 func TestBuildEvaluationCallOptionsUsesConfiguredRunnersAndFlags(t *testing.T) {
-	structure, err := newStructureState(testStructureSnapshot(t))
+	structure, err := profilecompiler.NewStructure(testStructureSnapshot(t))
 	require.NoError(t, err)
 	teacher := &stubRunner{}
 	judge := &stubRunner{}
-	options, buildErr := buildEvaluationCallOptions(structure, &EvaluationRequest{
+	request := &EvaluationRequest{
 		EvalSets: []EvalSetInput{{EvalSetID: "validation"}},
 		Teacher:  teacher,
 		Judge:    judge,
@@ -1377,7 +1344,14 @@ func TestBuildEvaluationCallOptionsUsesConfiguredRunnersAndFlags(t *testing.T) {
 			EvalCaseParallelInferenceEnabled:  true,
 			EvalCaseParallelEvaluationEnabled: true,
 		},
-	}, EvalSetInput{EvalSetID: "validation", EvalCaseIDs: []string{"case_1"}})
+	}
+	profileRunOptions, runOptionsErr := compileProfileRunOptions(structure, runtimeProfileFromStructure(t, structure))
+	require.NoError(t, runOptionsErr)
+	options, buildErr := buildEvaluationCallOptions(
+		request,
+		EvalSetInput{EvalSetID: "validation", EvalCaseIDs: []string{"case_1"}},
+		profileRunOptions,
+	)
 	require.NoError(t, buildErr)
 	agentEvaluator, newErr := evaluation.New("promptiter-test", &stubRunner{}, options...)
 	require.NoError(t, newErr)
@@ -1401,7 +1375,7 @@ func TestBuildEvaluationCallOptionsUsesConfiguredRunnersAndFlags(t *testing.T) {
 }
 
 func TestBuildEvaluationCallOptionsAppliesToolSurfacePatchAndTracing(t *testing.T) {
-	structure, err := newStructureState(&astructure.Snapshot{
+	structure, err := profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		EntryNodeID: "entry",
 		Nodes: []astructure.Node{
@@ -1433,25 +1407,24 @@ func TestBuildEvaluationCallOptionsAppliesToolSurfacePatchAndTracing(t *testing.
 		},
 	})
 	require.NoError(t, err)
-	options, buildErr := buildEvaluationCallOptions(structure, &EvaluationRequest{
-		Profile: &promptiter.Profile{
-			StructureID: "structure_1",
-			Overrides: []promptiter.SurfaceOverride{
-				{
-					SurfaceID: "entry#instruction",
-					Value:     astructure.SurfaceValue{Text: stringPtr("patched instruction")},
-				},
-				{
-					SurfaceID: "entry#tool.lookup",
-					Value: astructure.SurfaceValue{
-						Tools: []astructure.ToolRef{
-							{ID: "lookup", Description: "patched lookup"},
-						},
-					},
+	profile := &promptiter.Profile{
+		Overrides: []promptiter.SurfaceOverride{
+			{
+				SurfaceID: "entry#instruction",
+				Value:     astructure.SurfaceValue{Text: stringPtr("patched instruction")},
+			},
+			{
+				SurfaceID: "entry#tool.lookup",
+				Value: astructure.SurfaceValue{
+					Tools: []astructure.ToolRef{{ID: "lookup", Description: "patched lookup"}},
 				},
 			},
 		},
-	}, EvalSetInput{EvalSetID: "validation"})
+	}
+	request := &EvaluationRequest{Profile: profile}
+	profileRunOptions, runOptionsErr := compileProfileRunOptions(structure, request.Profile)
+	require.NoError(t, runOptionsErr)
+	options, buildErr := buildEvaluationCallOptions(request, EvalSetInput{EvalSetID: "validation"}, profileRunOptions)
 	require.NoError(t, buildErr)
 	agentEvaluator, newErr := evaluation.New("promptiter-test", &stubRunner{}, options...)
 	require.NoError(t, newErr)
@@ -1475,154 +1448,33 @@ func TestBuildEvaluationCallOptionsAppliesToolSurfacePatchAndTracing(t *testing.
 }
 
 func TestBuildEvaluationCallOptionsRejectsInvalidRequest(t *testing.T) {
-	options, err := buildEvaluationCallOptions(nil, nil, EvalSetInput{})
+	options, err := buildEvaluationCallOptions(nil, EvalSetInput{}, nil)
 	assert.Nil(t, options)
 	assert.EqualError(t, err, "evaluation request is nil")
-	structure, buildErr := newStructureState(testStructureSnapshot(t))
-	require.NoError(t, buildErr)
-	options, err = buildEvaluationCallOptions(structure, &EvaluationRequest{
-		Profile: &promptiter.Profile{
-			StructureID: "other",
-		},
-	}, EvalSetInput{EvalSetID: "validation"})
-	assert.Nil(t, options)
-	assert.ErrorContains(t, err, "profile structure id")
-}
-
-func TestSurfacePatchRunOptionsIgnoreEmptyInputs(t *testing.T) {
-	emptyPatchOpt := withSurfacePatchForNode("entry", surfacepatch.Patch{})
-	emptyPatchOpt(nil)
-	var opts agent.RunOptions
-	emptyPatchOpt(&opts)
-	assert.Empty(t, opts.CustomAgentConfigs)
-	emptyNodeOpt := withSurfacePatchForNode("", surfacepatch.Patch{})
-	emptyNodeOpt(&opts)
-	assert.Empty(t, opts.CustomAgentConfigs)
-	traceOpt := withToolSurfaceTracing()
-	traceOpt(nil)
-	traceOpt(&opts)
-	assert.True(t, surfacepatch.ToolSurfaceTracingEnabled(opts.CustomAgentConfigs))
 }
 
 func TestCompileProfileRunOptionsValidationErrors(t *testing.T) {
-	runOptions, err := compileProfileRunOptions(nil, nil)
-	assert.Nil(t, runOptions)
-	assert.EqualError(t, err, "structure state is nil")
-	structure, buildErr := newStructureState(testStructureSnapshot(t))
-	require.NoError(t, buildErr)
-	runOptions, err = compileProfileRunOptions(structure, &promptiter.Profile{StructureID: "other"})
-	assert.Nil(t, runOptions)
-	assert.ErrorContains(t, err, "profile structure id")
-	runOptions, err = compileProfileRunOptions(structure, &promptiter.Profile{
-		StructureID: structure.snapshot.StructureID,
+	structure, structureErr := profilecompiler.NewStructure(testStructureSnapshot(t))
+	require.NoError(t, structureErr)
+	runOptions, err := compileProfileRunOptions(structure, &promptiter.Profile{
+		StructureID: structure.Snapshot.StructureID,
 		Overrides: []promptiter.SurfaceOverride{
 			{
-				SurfaceID: "missing#instruction",
-				Value: astructure.SurfaceValue{
-					Text: stringPtr("patched"),
-				},
+				SurfaceID: testSurfaceID,
+				Value:     astructure.SurfaceValue{},
 			},
 		},
 	})
 	assert.Nil(t, runOptions)
-	assert.ErrorContains(t, err, "unknown surface id")
-}
-
-func TestConvertToolRefsValidationErrors(t *testing.T) {
-	declarations, err := convertToolRefs([]astructure.ToolRef{{}})
-	assert.Nil(t, declarations)
-	assert.EqualError(t, err, "tool id is empty")
-	declarations, err = convertToolRefs([]astructure.ToolRef{
-		{ID: "lookup"},
-		{ID: "lookup"},
-	})
-	assert.Nil(t, declarations)
-	assert.EqualError(t, err, `duplicate tool id "lookup"`)
-}
-
-func TestApplySurfaceOverrideToPatchValidationErrors(t *testing.T) {
-	var patch surfacepatch.Patch
-	err := applySurfaceOverrideToPatch(nil, astructure.Surface{}, astructure.SurfaceValue{})
-	assert.EqualError(t, err, "surface patch is nil")
-	err = applySurfaceOverrideToPatch(&patch, astructure.Surface{
-		SurfaceID: "node_1#instruction",
-		Type:      astructure.SurfaceTypeInstruction,
-	}, astructure.SurfaceValue{})
-	assert.ErrorContains(t, err, "instruction value is nil")
-	err = applySurfaceOverrideToPatch(&patch, astructure.Surface{
-		SurfaceID: "node_1#global_instruction",
-		Type:      astructure.SurfaceTypeGlobalInstruction,
-	}, astructure.SurfaceValue{})
-	assert.ErrorContains(t, err, "global instruction value is nil")
-	err = applySurfaceOverrideToPatch(&patch, astructure.Surface{
-		SurfaceID: "node_1#few_shot",
-		Type:      astructure.SurfaceTypeFewShot,
-	}, astructure.SurfaceValue{
-		FewShot: []astructure.FewShotExample{
-			{
-				Messages: []astructure.FewShotMessage{
-					{
-						Role:    "invalid",
-						Content: "question",
-					},
-				},
-			},
-		},
-	})
-	assert.ErrorContains(t, err, "few-shot value is invalid")
-	err = applySurfaceOverrideToPatch(&patch, astructure.Surface{
-		SurfaceID: "node_1#unsupported",
-		Type:      astructure.SurfaceType("unsupported"),
-	}, astructure.SurfaceValue{})
-	assert.ErrorContains(t, err, "is not supported by generic evaluation")
-}
-
-func TestBuildModelInstanceUsesVariant(t *testing.T) {
-	const providerName = "promptiter_variant_provider"
-	var capturedOptions provider.Options
-	provider.Register(providerName, func(opts *provider.Options) (model.Model, error) {
-		capturedOptions = *opts
-		return &providerBackedTestModel{name: opts.ModelName}, nil
-	})
-	modelInstance, err := buildModelInstance(&astructure.ModelRef{
-		Provider: providerName,
-		Name:     "test-model",
-		Variant:  "mini",
-	})
-	require.NoError(t, err)
-	require.NotNil(t, modelInstance)
-	assert.Equal(t, "mini", capturedOptions.Variant)
-}
-
-func TestConvertFewShotExamplesConvertsMessages(t *testing.T) {
-	examples, err := convertFewShotExamples([]astructure.FewShotExample{
-		{
-			Messages: []astructure.FewShotMessage{
-				{
-					Role:    string(model.RoleSystem),
-					Content: "follow the format",
-				},
-				{
-					Role:    string(model.RoleUser),
-					Content: "question",
-				},
-			},
-		},
-	})
-	require.NoError(t, err)
-	require.Len(t, examples, 1)
-	require.Len(t, examples[0], 2)
-	assert.Equal(t, model.RoleSystem, examples[0][0].Role)
-	assert.Equal(t, "follow the format", examples[0][0].Content)
-	assert.Equal(t, model.RoleUser, examples[0][1].Role)
+	assert.EqualError(t, err, `sanitize profile override "node_1#instruction": text is nil`)
 }
 
 func TestBuildBackwardRequestKeepsContextSurfacesButRestrictsAllowedGradientSurfaceIDs(t *testing.T) {
 	instructionText := "base prompt"
-	modelRef := &astructure.ModelRef{Name: "gpt-test"}
+	globalText := "global prompt"
 	instructionSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeInstruction)
-	modelSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeModel)
-	structure, err := newStructureState(&astructure.Snapshot{
+	globalSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeGlobalInstruction)
+	structure, err := profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		EntryNodeID: "node_1",
 		Nodes: []astructure.Node{
@@ -1638,11 +1490,11 @@ func TestBuildBackwardRequestKeepsContextSurfacesButRestrictsAllowedGradientSurf
 				},
 			},
 			{
-				SurfaceID: modelSurfaceID,
+				SurfaceID: globalSurfaceID,
 				NodeID:    "node_1",
-				Type:      astructure.SurfaceTypeModel,
+				Type:      astructure.SurfaceTypeGlobalInstruction,
 				Value: astructure.SurfaceValue{
-					Model: modelRef,
+					Text: &globalText,
 				},
 			},
 		},
@@ -1650,13 +1502,13 @@ func TestBuildBackwardRequestKeepsContextSurfacesButRestrictsAllowedGradientSurf
 	assert.NoError(t, err)
 	request, err := buildBackwardRequest(
 		structure,
-		nil,
+		map[string]promptiter.SurfaceOverride{},
 		map[string]indexedTraceStep{},
 		CaseResult{EvalSetID: "train", EvalCaseID: "case_1"},
 		atrace.Step{
 			StepID:            "step_1",
 			NodeID:            "node_1",
-			AppliedSurfaceIDs: []string{instructionSurfaceID, modelSurfaceID},
+			AppliedSurfaceIDs: []string{instructionSurfaceID, globalSurfaceID},
 		},
 		[]backwarder.GradientPacket{
 			{
@@ -1670,15 +1522,18 @@ func TestBuildBackwardRequestKeepsContextSurfacesButRestrictsAllowedGradientSurf
 	assert.NoError(t, err)
 	if assert.NotNil(t, request) {
 		assert.Len(t, request.Surfaces, 2)
+		assert.Equal(t, instructionSurfaceID, request.Surfaces[0].SurfaceID)
+		assert.Equal(t, globalSurfaceID, request.Surfaces[1].SurfaceID)
 		assert.Equal(t, []string{instructionSurfaceID}, request.AllowedGradientSurfaceIDs)
 	}
 }
 
 func TestBuildBackwardRequestPreservesEmptyAllowedGradientSurfaceIDs(t *testing.T) {
 	instructionText := "base prompt"
+	globalText := "global prompt"
 	instructionSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeInstruction)
-	modelSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeModel)
-	structure, err := newStructureState(&astructure.Snapshot{
+	globalSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeGlobalInstruction)
+	structure, err := profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		EntryNodeID: "node_1",
 		Nodes: []astructure.Node{
@@ -1694,11 +1549,11 @@ func TestBuildBackwardRequestPreservesEmptyAllowedGradientSurfaceIDs(t *testing.
 				},
 			},
 			{
-				SurfaceID: modelSurfaceID,
+				SurfaceID: globalSurfaceID,
 				NodeID:    "node_1",
-				Type:      astructure.SurfaceTypeModel,
+				Type:      astructure.SurfaceTypeGlobalInstruction,
 				Value: astructure.SurfaceValue{
-					Model: &astructure.ModelRef{Name: "gpt-test"},
+					Text: &globalText,
 				},
 			},
 		},
@@ -1706,7 +1561,7 @@ func TestBuildBackwardRequestPreservesEmptyAllowedGradientSurfaceIDs(t *testing.
 	require.NoError(t, err)
 	request, err := buildBackwardRequest(
 		structure,
-		nil,
+		map[string]promptiter.SurfaceOverride{},
 		map[string]indexedTraceStep{},
 		CaseResult{EvalSetID: "train", EvalCaseID: "case_1"},
 		atrace.Step{
@@ -1721,7 +1576,7 @@ func TestBuildBackwardRequestPreservesEmptyAllowedGradientSurfaceIDs(t *testing.
 				Gradient:   "focus on the live call",
 			},
 		},
-		targetSurfaceSet{modelSurfaceID: {}},
+		targetSurfaceSet{globalSurfaceID: {}},
 	)
 	require.NoError(t, err)
 	require.NotNil(t, request)
@@ -1729,15 +1584,24 @@ func TestBuildBackwardRequestPreservesEmptyAllowedGradientSurfaceIDs(t *testing.
 	assert.Empty(t, request.AllowedGradientSurfaceIDs)
 }
 
-func TestAggregateRejectsOutOfScopeGradient(t *testing.T) {
+func TestBuildBackwardRequestSkipsKnownUnsupportedAppliedSurfaces(t *testing.T) {
+	instructionText := "base prompt"
 	modelSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeModel)
-	structure, err := newStructureState(&astructure.Snapshot{
+	structure, err := profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		EntryNodeID: "node_1",
 		Nodes: []astructure.Node{
 			{NodeID: "node_1", Kind: astructure.NodeKindLLM, Name: "writer"},
 		},
 		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: testSurfaceID,
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeInstruction,
+				Value: astructure.SurfaceValue{
+					Text: &instructionText,
+				},
+			},
 			{
 				SurfaceID: modelSurfaceID,
 				NodeID:    "node_1",
@@ -1748,10 +1612,40 @@ func TestAggregateRejectsOutOfScopeGradient(t *testing.T) {
 			},
 		},
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
+	request, err := buildBackwardRequest(
+		structure,
+		map[string]promptiter.SurfaceOverride{},
+		map[string]indexedTraceStep{},
+		CaseResult{EvalSetID: "train", EvalCaseID: "case_1"},
+		atrace.Step{
+			StepID:            "step_1",
+			NodeID:            "node_1",
+			AppliedSurfaceIDs: []string{testSurfaceID, modelSurfaceID},
+		},
+		[]backwarder.GradientPacket{
+			{
+				FromStepID: "step_2",
+				Severity:   promptiter.LossSeverityP1,
+				Gradient:   "focus on the live call",
+			},
+		},
+		targetSurfaceSet{testSurfaceID: {}},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, request)
+	require.Len(t, request.Surfaces, 1)
+	assert.Equal(t, testSurfaceID, request.Surfaces[0].SurfaceID)
+	assert.Equal(t, []string{testSurfaceID}, request.AllowedGradientSurfaceIDs)
+}
+
+func TestAggregateRejectsOutOfScopeGradient(t *testing.T) {
+	modelSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeModel)
 	aggregatorInstance := &fakeAggregator{}
 	engineInstance := &engine{aggregator: aggregatorInstance}
-	_, err = engineInstance.aggregate(context.Background(), structure, &BackwardResult{
+	structure, structureErr := profilecompiler.NewStructure(testStructureSnapshot(t))
+	require.NoError(t, structureErr)
+	_, err := engineInstance.aggregate(context.Background(), structure, &BackwardResult{
 		Cases: []CaseBackwardResult{
 			{
 				StepGradients: []promptiter.StepGradient{
@@ -1775,7 +1669,7 @@ func TestAggregateRejectsOutOfScopeGradient(t *testing.T) {
 }
 
 func TestAggregateValidatesDependenciesAndResponses(t *testing.T) {
-	structure, err := newStructureState(testStructureSnapshot(t))
+	structure, err := profilecompiler.NewStructure(testStructureSnapshot(t))
 	require.NoError(t, err)
 	t.Run("nil aggregator", func(t *testing.T) {
 		engineInstance := &engine{}
@@ -1783,11 +1677,12 @@ func TestAggregateValidatesDependenciesAndResponses(t *testing.T) {
 		assert.Nil(t, result)
 		assert.EqualError(t, runErr, "aggregator is nil")
 	})
-	t.Run("nil structure", func(t *testing.T) {
+	t.Run("empty backward result", func(t *testing.T) {
 		engineInstance := &engine{aggregator: &fakeAggregator{}}
-		result, runErr := engineInstance.aggregate(context.Background(), nil, nil, targetSurfaceSet{}, AggregationOptions{})
-		assert.Nil(t, result)
-		assert.EqualError(t, runErr, "structure state is nil")
+		result, runErr := engineInstance.aggregate(context.Background(), structure, nil, targetSurfaceSet{}, AggregationOptions{})
+		assert.NoError(t, runErr)
+		require.NotNil(t, result)
+		assert.Empty(t, result.Surfaces)
 	})
 	t.Run("unknown surface", func(t *testing.T) {
 		engineInstance := &engine{aggregator: &fakeAggregator{}}
@@ -1872,27 +1767,11 @@ func TestAggregateValidatesDependenciesAndResponses(t *testing.T) {
 
 func TestOptimizeRejectsOutOfScopeSurface(t *testing.T) {
 	modelSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeModel)
-	structure, err := newStructureState(&astructure.Snapshot{
-		StructureID: "structure_1",
-		EntryNodeID: "node_1",
-		Nodes: []astructure.Node{
-			{NodeID: "node_1", Kind: astructure.NodeKindLLM, Name: "writer"},
-		},
-		Surfaces: []astructure.Surface{
-			{
-				SurfaceID: modelSurfaceID,
-				NodeID:    "node_1",
-				Type:      astructure.SurfaceTypeModel,
-				Value: astructure.SurfaceValue{
-					Model: &astructure.ModelRef{Name: "gpt-test"},
-				},
-			},
-		},
-	})
-	assert.NoError(t, err)
 	optimizerInstance := &fakeOptimizer{}
 	engineInstance := &engine{optimizer: optimizerInstance}
-	_, err = engineInstance.optimize(context.Background(), structure, nil, &AggregationResult{
+	structure, structureErr := profilecompiler.NewStructure(testStructureSnapshot(t))
+	require.NoError(t, structureErr)
+	_, err := engineInstance.optimize(context.Background(), structure, nil, &AggregationResult{
 		Surfaces: []promptiter.AggregatedSurfaceGradient{
 			{
 				SurfaceID: modelSurfaceID,
@@ -1907,7 +1786,7 @@ func TestOptimizeRejectsOutOfScopeSurface(t *testing.T) {
 }
 
 func TestOptimizeValidatesDependenciesAndResponses(t *testing.T) {
-	structure, err := newStructureState(testStructureSnapshot(t))
+	structure, err := profilecompiler.NewStructure(testStructureSnapshot(t))
 	require.NoError(t, err)
 	t.Run("nil optimizer", func(t *testing.T) {
 		engineInstance := &engine{}
@@ -1915,11 +1794,12 @@ func TestOptimizeValidatesDependenciesAndResponses(t *testing.T) {
 		assert.Nil(t, patchSet)
 		assert.EqualError(t, runErr, "optimizer is nil")
 	})
-	t.Run("nil structure", func(t *testing.T) {
+	t.Run("empty aggregation result", func(t *testing.T) {
 		engineInstance := &engine{optimizer: &fakeOptimizer{}}
-		patchSet, runErr := engineInstance.optimize(context.Background(), nil, nil, nil, targetSurfaceSet{}, OptimizerOptions{})
-		assert.Nil(t, patchSet)
-		assert.EqualError(t, runErr, "structure state is nil")
+		patchSet, runErr := engineInstance.optimize(context.Background(), structure, nil, nil, targetSurfaceSet{}, OptimizerOptions{})
+		assert.NoError(t, runErr)
+		require.NotNil(t, patchSet)
+		assert.Empty(t, patchSet.Patches)
 	})
 	t.Run("resolve profile surface error", func(t *testing.T) {
 		engineInstance := &engine{optimizer: &fakeOptimizer{}}
@@ -1961,7 +1841,7 @@ func TestOptimizeValidatesDependenciesAndResponses(t *testing.T) {
 	})
 	t.Run("sort patches by surface id", func(t *testing.T) {
 		secondSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeGlobalInstruction)
-		structureWithSecondSurface, buildErr := newStructureState(&astructure.Snapshot{
+		structureWithSecondSurface, buildErr := profilecompiler.NewStructure(&astructure.Snapshot{
 			StructureID: "structure_1",
 			EntryNodeID: "node_1",
 			Nodes: []astructure.Node{
@@ -2021,8 +1901,6 @@ func TestOptimizeValidatesDependenciesAndResponses(t *testing.T) {
 }
 
 func TestAdaptEvaluationCaseResultUsesFirstRunWhenMultipleRunsExist(t *testing.T) {
-	structure, err := newStructureState(testStructureSnapshot(t))
-	assert.NoError(t, err)
 	evalCase := &evaluation.EvaluationCaseResult{
 		EvalCaseID: "case_1",
 		EvalCaseResults: []*evalresult.EvalCaseResult{
@@ -2104,6 +1982,8 @@ func TestAdaptEvaluationCaseResultUsesFirstRunWhenMultipleRunsExist(t *testing.T
 			},
 		},
 	}
+	structure, err := profilecompiler.NewStructure(testStructureSnapshot(t))
+	require.NoError(t, err)
 	result, err := adaptEvaluationCaseResult(structure, "validation", evalCase)
 	assert.NoError(t, err)
 	assert.Equal(t, "validation", result.EvalSetID)
@@ -2116,11 +1996,11 @@ func TestAdaptEvaluationCaseResultUsesFirstRunWhenMultipleRunsExist(t *testing.T
 func TestRunRejectsEmptyValidationEvalSets(t *testing.T) {
 	engineInstance, err := New(
 		context.Background(),
-		testTargetAgent(),
-		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
-		&fakeBackwarder{},
-		&fakeAggregator{},
-		&fakeOptimizer{},
+		WithAgentEvaluator(newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome))),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(testTargetAgent()),
 	)
 	assert.NoError(t, err)
 	_, err = engineInstance.Run(context.Background(), &RunRequest{
@@ -2134,11 +2014,11 @@ func TestRunRejectsEmptyValidationEvalSets(t *testing.T) {
 func TestRunRejectsNilRequest(t *testing.T) {
 	engineInstance, err := New(
 		context.Background(),
-		testTargetAgent(),
-		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
-		&fakeBackwarder{},
-		&fakeAggregator{},
-		&fakeOptimizer{},
+		WithAgentEvaluator(newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome))),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(testTargetAgent()),
 	)
 	assert.NoError(t, err)
 	result, runErr := engineInstance.Run(context.Background(), nil)
@@ -2149,11 +2029,11 @@ func TestRunRejectsNilRequest(t *testing.T) {
 func TestRunRejectsEmptyTrainEvalSets(t *testing.T) {
 	engineInstance, err := New(
 		context.Background(),
-		testTargetAgent(),
-		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
-		&fakeBackwarder{},
-		&fakeAggregator{},
-		&fakeOptimizer{},
+		WithAgentEvaluator(newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome))),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(testTargetAgent()),
 	)
 	assert.NoError(t, err)
 	result, runErr := engineInstance.Run(context.Background(), &RunRequest{
@@ -2271,11 +2151,11 @@ func TestValidateEvalSetInputsRejectsInvalidInputs(t *testing.T) {
 func TestRunRejectsNonPositiveMaxRounds(t *testing.T) {
 	engineInstance, err := New(
 		context.Background(),
-		testTargetAgent(),
-		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
-		&fakeBackwarder{},
-		&fakeAggregator{},
-		&fakeOptimizer{},
+		WithAgentEvaluator(newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome))),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(testTargetAgent()),
 	)
 	assert.NoError(t, err)
 	result, runErr := engineInstance.Run(context.Background(), &RunRequest{
@@ -2290,18 +2170,19 @@ func TestRunRejectsNonPositiveMaxRounds(t *testing.T) {
 func TestRunRejectsNegativeStageOptions(t *testing.T) {
 	engineInstance, err := New(
 		context.Background(),
-		testTargetAgent(),
-		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
-		&fakeBackwarder{},
-		&fakeAggregator{},
-		&fakeOptimizer{},
+		WithAgentEvaluator(newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome))),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(testTargetAgent()),
 	)
 	require.NoError(t, err)
 	baseRequest := func() *RunRequest {
 		return &RunRequest{
-			Train:      testEvalSetInputs("train"),
-			Validation: testEvalSetInputs("validation"),
-			MaxRounds:  1,
+			Train:            testEvalSetInputs("train"),
+			Validation:       testEvalSetInputs("validation"),
+			MaxRounds:        1,
+			TargetSurfaceIDs: []string{testSurfaceID},
 		}
 	}
 	request := baseRequest()
@@ -2319,35 +2200,78 @@ func TestRunRejectsNegativeStageOptions(t *testing.T) {
 }
 
 func TestRunRejectsInvalidInitialProfile(t *testing.T) {
-	backward := &fakeBackwarder{}
-	aggregatorInstance := &fakeAggregator{}
-	optimizerInstance := &fakeOptimizer{}
 	engineInstance, err := New(
 		context.Background(),
-		testTargetAgent(),
-		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
-		backward,
-		aggregatorInstance,
-		optimizerInstance,
+		WithAgentEvaluator(newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome))),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(testTargetAgent()),
 	)
 	assert.NoError(t, err)
-	_, err = engineInstance.Run(context.Background(), &RunRequest{
-		Train:      testEvalSetInputs("train"),
-		Validation: testEvalSetInputs("validation"),
-		InitialProfile: &promptiter.Profile{
-			Overrides: []promptiter.SurfaceOverride{
-				{
-					SurfaceID: "unknown",
-					Value: astructure.SurfaceValue{
-						Text: stringPtr("bad"),
+	for _, tc := range []struct {
+		name             string
+		initialProfile   *promptiter.Profile
+		targetSurfaceIDs []string
+		wantErr          string
+	}{
+		{
+			name:           "structure mismatch",
+			initialProfile: &promptiter.Profile{StructureID: "other"},
+			wantErr:        `profile structure id "other" does not match structure id`,
+		},
+		{
+			name: "empty surface id",
+			initialProfile: &promptiter.Profile{
+				Overrides: []promptiter.SurfaceOverride{
+					{
+						Value: astructure.SurfaceValue{Text: stringPtr("bad")},
 					},
 				},
 			},
+			wantErr: "profile override surface id is empty",
 		},
-		MaxRounds: 1,
-	})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown")
+		{
+			name: "unknown surface",
+			initialProfile: &promptiter.Profile{
+				Overrides: []promptiter.SurfaceOverride{
+					{
+						SurfaceID: "unknown",
+						Value:     astructure.SurfaceValue{Text: stringPtr("bad")},
+					},
+				},
+			},
+			wantErr: `profile override references unknown surface id "unknown"`,
+		},
+		{
+			name: "invalid value",
+			initialProfile: &promptiter.Profile{
+				Overrides: []promptiter.SurfaceOverride{
+					{
+						SurfaceID: testSurfaceID,
+						Value:     astructure.SurfaceValue{},
+					},
+				},
+			},
+			wantErr: `sanitize profile override "node_1#instruction": text is nil`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			targetSurfaceIDs := tc.targetSurfaceIDs
+			if targetSurfaceIDs == nil {
+				targetSurfaceIDs = []string{testSurfaceID}
+			}
+			_, err := engineInstance.Run(context.Background(), &RunRequest{
+				Train:            testEvalSetInputs("train"),
+				Validation:       testEvalSetInputs("validation"),
+				InitialProfile:   tc.initialProfile,
+				MaxRounds:        1,
+				TargetSurfaceIDs: targetSurfaceIDs,
+			})
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
 }
 
 func TestCalculateEvaluationScore(t *testing.T) {
@@ -2417,16 +2341,25 @@ func TestAdaptMetricResults(t *testing.T) {
 	assert.EqualError(t, err, `metric "quality" is missing loss reason`)
 }
 
-func TestValidateTraceAgainstStructure(t *testing.T) {
-	structure, err := newStructureState(testStructureSnapshot(t))
-	assert.NoError(t, err)
-	assert.EqualError(t, validateTraceAgainstStructure(nil, &atrace.Trace{}), "structure state is nil")
-	assert.EqualError(t, validateTraceAgainstStructure(structure, nil), "execution trace is nil")
-	err = validateTraceAgainstStructure(structure, &atrace.Trace{
+func TestValidateTrace(t *testing.T) {
+	structure, structureErr := profilecompiler.NewStructure(testStructureSnapshot(t))
+	require.NoError(t, structureErr)
+	assert.EqualError(t, validateTrace(structure, nil), "execution trace is nil")
+	err := validateTrace(structure, &atrace.Trace{
 		Steps: []atrace.Step{{NodeID: "node_1"}},
 	})
 	assert.EqualError(t, err, "execution trace step id is empty")
-	err = validateTraceAgainstStructure(structure, &atrace.Trace{
+	err = validateTrace(structure, &atrace.Trace{
+		Steps: []atrace.Step{
+			{
+				StepID:            "step_1",
+				NodeID:            "node_1",
+				AppliedSurfaceIDs: []string{""},
+			},
+		},
+	})
+	assert.EqualError(t, err, `execution trace step "step_1" applied surface id is empty`)
+	err = validateTrace(structure, &atrace.Trace{
 		Steps: []atrace.Step{
 			{
 				StepID:            "step_1",
@@ -2436,7 +2369,7 @@ func TestValidateTraceAgainstStructure(t *testing.T) {
 		},
 	})
 	assert.EqualError(t, err, `execution trace step "step_1" references unknown surface id "unknown#instruction"`)
-	assert.NoError(t, validateTraceAgainstStructure(structure, &atrace.Trace{
+	assert.NoError(t, validateTrace(structure, &atrace.Trace{
 		Steps: []atrace.Step{
 			{
 				StepID:            "step_1",
@@ -2447,34 +2380,9 @@ func TestValidateTraceAgainstStructure(t *testing.T) {
 	}))
 }
 
-func TestValidateTraceAgainstStructureAllowsKnownUnsupportedSurface(t *testing.T) {
-	structure, err := newStructureState(testStructureSnapshotWithToolSurface(t))
-	assert.NoError(t, err)
-	err = validateTraceAgainstStructure(structure, &atrace.Trace{
-		Steps: []atrace.Step{
-			{
-				StepID:            "step_1",
-				NodeID:            "node_1",
-				AppliedSurfaceIDs: []string{testSurfaceID, testToolSurfaceID},
-			},
-		},
-	})
-	assert.NoError(t, err)
-	err = validateTraceAgainstStructure(structure, &atrace.Trace{
-		Steps: []atrace.Step{
-			{
-				StepID:            "step_1",
-				NodeID:            "node_1",
-				AppliedSurfaceIDs: []string{"node_1#missing_tool"},
-			},
-		},
-	})
-	assert.EqualError(t, err, `execution trace step "step_1" references unknown surface id "node_1#missing_tool"`)
-}
-
 func TestExtractInferenceTraceDetails(t *testing.T) {
-	structure, err := newStructureState(testStructureSnapshot(t))
-	assert.NoError(t, err)
+	structure, structureErr := profilecompiler.NewStructure(testStructureSnapshot(t))
+	require.NoError(t, structureErr)
 	trace, sessionID, err := extractInferenceTraceDetails(structure, "case_1", nil)
 	assert.Nil(t, trace)
 	assert.Empty(t, sessionID)
@@ -2521,8 +2429,8 @@ func TestExtractInferenceTraceDetails(t *testing.T) {
 }
 
 func TestAdaptEvaluationCaseResultValidationErrors(t *testing.T) {
-	structure, err := newStructureState(testStructureSnapshot(t))
-	assert.NoError(t, err)
+	structure, structureErr := profilecompiler.NewStructure(testStructureSnapshot(t))
+	require.NoError(t, structureErr)
 	result, err := adaptEvaluationCaseResult(structure, "validation", nil)
 	assert.Nil(t, result)
 	assert.EqualError(t, err, "evaluation case result is nil")
@@ -2565,12 +2473,9 @@ func TestAdaptEvaluationCaseResultValidationErrors(t *testing.T) {
 }
 
 func TestAdaptEvaluationSetResultValidationErrors(t *testing.T) {
-	structure, err := newStructureState(testStructureSnapshot(t))
-	assert.NoError(t, err)
-	evalSet, err := adaptEvaluationSetResult(nil, "validation", &evaluation.EvaluationResult{})
-	assert.Nil(t, evalSet)
-	assert.EqualError(t, err, "structure state is nil")
-	evalSet, err = adaptEvaluationSetResult(structure, "validation", nil)
+	structure, structureErr := profilecompiler.NewStructure(testStructureSnapshot(t))
+	require.NoError(t, structureErr)
+	evalSet, err := adaptEvaluationSetResult(structure, "validation", nil)
 	assert.Nil(t, evalSet)
 	assert.EqualError(t, err, "evaluation result is nil")
 	evalSet, err = adaptEvaluationSetResult(structure, "validation", &evaluation.EvaluationResult{})
@@ -2588,35 +2493,14 @@ func TestAdaptEvaluationSetResultValidationErrors(t *testing.T) {
 	assert.EqualError(t, err, "evaluation result has no metric scores")
 }
 
-func TestBuildModelInstanceAndConvertFewShotExamplesValidation(t *testing.T) {
-	modelInstance, err := buildModelInstance(nil)
-	assert.Nil(t, modelInstance)
-	assert.EqualError(t, err, "model ref is nil")
-	modelInstance, err = buildModelInstance(&astructure.ModelRef{Name: "gpt"})
-	assert.Nil(t, modelInstance)
-	assert.EqualError(t, err, "model provider is empty")
-	modelInstance, err = buildModelInstance(&astructure.ModelRef{Provider: "openai"})
-	assert.Nil(t, modelInstance)
-	assert.EqualError(t, err, "model name is empty")
-	examples, err := convertFewShotExamples([]astructure.FewShotExample{
-		{
-			Messages: []astructure.FewShotMessage{
-				{Role: "unknown", Content: "bad"},
-			},
-		},
-	})
-	assert.Nil(t, examples)
-	assert.EqualError(t, err, `example 0 message 0 role "unknown" is invalid`)
-}
-
 func TestNewStructureStateValidationErrors(t *testing.T) {
-	state, err := newStructureState(nil)
+	state, err := profilecompiler.NewStructure(nil)
 	assert.Nil(t, state)
 	assert.EqualError(t, err, "structure snapshot is nil")
-	state, err = newStructureState(&astructure.Snapshot{})
+	state, err = profilecompiler.NewStructure(&astructure.Snapshot{})
 	assert.Nil(t, state)
 	assert.EqualError(t, err, "structure id is empty")
-	state, err = newStructureState(&astructure.Snapshot{
+	state, err = profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		Nodes: []astructure.Node{
 			{},
@@ -2624,7 +2508,7 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 	})
 	assert.Nil(t, state)
 	assert.EqualError(t, err, "node id is empty")
-	state, err = newStructureState(&astructure.Snapshot{
+	state, err = profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		Nodes: []astructure.Node{
 			{NodeID: "node_1"},
@@ -2633,7 +2517,7 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 	})
 	assert.Nil(t, state)
 	assert.EqualError(t, err, `duplicate node id "node_1"`)
-	state, err = newStructureState(&astructure.Snapshot{
+	state, err = profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		Nodes: []astructure.Node{
 			{NodeID: "node_1", Kind: astructure.NodeKindLLM},
@@ -2651,7 +2535,41 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 	})
 	assert.Nil(t, state)
 	assert.EqualError(t, err, `surface "candidate#instruction" references unknown node id "unknown"`)
-	state, err = newStructureState(&astructure.Snapshot{
+	state, err = profilecompiler.NewStructure(&astructure.Snapshot{
+		StructureID: "structure_1",
+		Nodes: []astructure.Node{
+			{NodeID: "node_1", Kind: astructure.NodeKindLLM},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				NodeID: "node_1",
+				Type:   astructure.SurfaceTypeInstruction,
+				Value: astructure.SurfaceValue{
+					Text: stringPtr("prompt"),
+				},
+			},
+		},
+	})
+	assert.Nil(t, state)
+	assert.EqualError(t, err, "build surface index: surface id is empty")
+	state, err = profilecompiler.NewStructure(&astructure.Snapshot{
+		StructureID: "structure_1",
+		Nodes: []astructure.Node{
+			{NodeID: "node_1", Kind: astructure.NodeKindLLM},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: "node_1#instruction",
+				Type:      astructure.SurfaceTypeInstruction,
+				Value: astructure.SurfaceValue{
+					Text: stringPtr("prompt"),
+				},
+			},
+		},
+	})
+	assert.Nil(t, state)
+	assert.EqualError(t, err, "build surface index: surface node id is empty")
+	state, err = profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		Nodes: []astructure.Node{
 			{NodeID: "node_1", Kind: astructure.NodeKindLLM},
@@ -2676,7 +2594,7 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 	})
 	assert.Nil(t, state)
 	assert.EqualError(t, err, `surface "node_1#tool.lookup" is invalid: tool surface value contains non-tool fields`)
-	state, err = newStructureState(&astructure.Snapshot{
+	state, err = profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		Nodes: []astructure.Node{
 			{NodeID: "node_1", Kind: astructure.NodeKindLLM},
@@ -2702,7 +2620,7 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 	})
 	assert.Nil(t, state)
 	assert.EqualError(t, err, `duplicate surface type "instruction" for node id "node_1"`)
-	state, err = newStructureState(&astructure.Snapshot{
+	state, err = profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		Nodes: []astructure.Node{
 			{NodeID: "node_1", Kind: astructure.NodeKindLLM},
@@ -2726,9 +2644,9 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	require.NotNil(t, state)
-	assert.Contains(t, state.surfaceIndex, "node_1#tool.lookup")
-	assert.Contains(t, state.knownSurfaceIDs, "node_1#tool.search")
-	state, err = newStructureState(&astructure.Snapshot{
+	assert.Contains(t, state.SurfaceIndex, "node_1#tool.lookup")
+	assert.Contains(t, state.KnownSurfaceIDs, "node_1#tool.search")
+	state, err = profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		Nodes: []astructure.Node{
 			{NodeID: "graph/llm", Kind: astructure.NodeKindLLM},
@@ -2746,9 +2664,9 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	require.NotNil(t, state)
-	assert.NotContains(t, state.surfaceIndex, "graph/llm#tool.lookup")
-	assert.Contains(t, state.knownSurfaceIDs, "graph/llm#tool.lookup")
-	state, err = newStructureState(&astructure.Snapshot{
+	assert.Contains(t, state.SurfaceIndex, "graph/llm#tool.lookup")
+	assert.Contains(t, state.KnownSurfaceIDs, "graph/llm#tool.lookup")
+	state, err = profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		Nodes: []astructure.Node{
 			{NodeID: "node_1"},
@@ -2773,8 +2691,8 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 		},
 	})
 	assert.Nil(t, state)
-	assert.EqualError(t, err, `build surface index: duplicate surface id "candidate#instruction"`)
-	state, err = newStructureState(&astructure.Snapshot{
+	assert.EqualError(t, err, `duplicate surface id "candidate#instruction"`)
+	state, err = profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		Nodes: []astructure.Node{
 			{NodeID: "node_1"},
@@ -2797,9 +2715,9 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	require.NotNil(t, state)
-	assert.Contains(t, state.surfaceIndex, "candidate#instruction")
-	assert.NotContains(t, state.surfaceIndex, "candidate#unsupported")
-	state, err = newStructureState(&astructure.Snapshot{
+	assert.Contains(t, state.SurfaceIndex, "candidate#instruction")
+	assert.NotContains(t, state.SurfaceIndex, "candidate#unsupported")
+	state, err = profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		Nodes: []astructure.Node{
 			{NodeID: "node_1", Kind: astructure.NodeKindTool},
@@ -2817,270 +2735,36 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	require.NotNil(t, state)
-	assert.NotContains(t, state.surfaceIndex, "node_1#tool.lookup")
-	assert.Contains(t, state.knownSurfaceIDs, "node_1#tool.lookup")
-}
-
-func TestPromptIterStructureSnapshotExpandsToolSurfaces(t *testing.T) {
-	text := "global"
-	snapshot := &astructure.Snapshot{
-		StructureID: "structure_1",
-		EntryNodeID: "node_1",
-		Nodes: []astructure.Node{
-			{NodeID: "node_1", Kind: astructure.NodeKindLLM},
-			{NodeID: "tool_node", Kind: astructure.NodeKindTool},
-		},
-		Surfaces: []astructure.Surface{
-			{
-				SurfaceID: "node_1#global_instruction",
-				NodeID:    "node_1",
-				Type:      astructure.SurfaceTypeGlobalInstruction,
-				Value:     astructure.SurfaceValue{Text: &text},
-			},
-			{
-				SurfaceID: "tool_node#global_instruction",
-				NodeID:    "tool_node",
-				Type:      astructure.SurfaceTypeGlobalInstruction,
-				Value:     astructure.SurfaceValue{Text: &text},
-			},
-			{
-				SurfaceID: "node_1#tool",
-				NodeID:    "node_1",
-				Type:      astructure.SurfaceTypeTool,
-				Value: astructure.SurfaceValue{
-					Tools: []astructure.ToolRef{
-						{ID: "lookup", Description: "Lookup."},
-						{ID: "delay", Description: "Delay."},
-					},
-				},
-			},
-			{
-				SurfaceID: "tool_node#tool.lookup",
-				NodeID:    "tool_node",
-				Type:      astructure.SurfaceTypeTool,
-				Value: astructure.SurfaceValue{
-					Tools: []astructure.ToolRef{{ID: "lookup"}},
-				},
-			},
-		},
-	}
-	projected, err := promptIterStructureSnapshot(snapshot)
-	assert.NoError(t, err)
-	require.NotNil(t, projected)
-	assert.Len(t, projected.Surfaces, 5)
-	assert.Equal(t, "node_1#global_instruction", projected.Surfaces[0].SurfaceID)
-	assert.Equal(t, "tool_node#global_instruction", projected.Surfaces[1].SurfaceID)
-	assert.Equal(t, "node_1#tool.lookup", projected.Surfaces[2].SurfaceID)
-	assert.Equal(t, "node_1#tool.delay", projected.Surfaces[3].SurfaceID)
-	assert.Equal(t, "tool_node#tool.lookup", projected.Surfaces[4].SurfaceID)
-	projected, err = promptIterStructureSnapshot(nil)
-	assert.NoError(t, err)
-	assert.Nil(t, projected)
-}
-
-func TestPromptIterStructureSnapshotKeepsEmptyAndRejectsInvalidToolSurfaces(t *testing.T) {
-	text := "global"
-	snapshot := &astructure.Snapshot{
-		StructureID: "structure_1",
-		Nodes: []astructure.Node{
-			{NodeID: "node_1", Kind: astructure.NodeKindLLM},
-		},
-		Surfaces: []astructure.Surface{
-			{
-				SurfaceID: "node_1#global_instruction",
-				NodeID:    "node_1",
-				Type:      astructure.SurfaceTypeGlobalInstruction,
-				Value:     astructure.SurfaceValue{Text: &text},
-			},
-			{
-				SurfaceID: "node_1#tool.empty",
-				NodeID:    "node_1",
-				Type:      astructure.SurfaceTypeTool,
-			},
-		},
-	}
-	projected, err := promptIterStructureSnapshot(snapshot)
-	assert.NoError(t, err)
-	require.NotNil(t, projected)
-	require.Len(t, projected.Surfaces, 2)
-	assert.Equal(t, "node_1#tool.empty", projected.Surfaces[1].SurfaceID)
-	snapshot.Surfaces[1].Value = astructure.SurfaceValue{
-		Text:  stringPtr("invalid"),
-		Tools: []astructure.ToolRef{{ID: "lookup"}},
-	}
-	projected, err = promptIterStructureSnapshot(snapshot)
-	assert.Nil(t, projected)
-	assert.EqualError(t, err, `surface "node_1#tool.empty" is invalid: tool surface value contains non-tool fields`)
-}
-
-func TestExpandToolSurfaceValidation(t *testing.T) {
-	text := "instruction"
-	expanded, err := expandToolSurface(astructure.Surface{
-		SurfaceID: "node_1#tool.empty",
-		NodeID:    "node_1",
-		Type:      astructure.SurfaceTypeTool,
-	})
-	assert.NoError(t, err)
-	assert.Empty(t, expanded)
-	expanded, err = expandToolSurface(astructure.Surface{
-		SurfaceID: "node_1#tool.lookup",
-		NodeID:    "node_1",
-		Type:      astructure.SurfaceTypeTool,
-		Value: astructure.SurfaceValue{
-			Tools: []astructure.ToolRef{{ID: "lookup"}},
-		},
-	})
-	assert.NoError(t, err)
-	require.Len(t, expanded, 1)
-	assert.Equal(t, "node_1#tool.lookup", expanded[0].SurfaceID)
-	_, err = expandToolSurface(astructure.Surface{
-		SurfaceID: "node_1#tool.bad",
-		NodeID:    "node_1",
-		Type:      astructure.SurfaceTypeTool,
-		Value:     astructure.SurfaceValue{Tools: []astructure.ToolRef{{}}},
-	})
-	assert.EqualError(t, err, "tool id is empty")
-	_, err = expandToolSurface(astructure.Surface{
-		SurfaceID: "node_1#tool.bad",
-		NodeID:    "node_1",
-		Type:      astructure.SurfaceTypeTool,
-		Value: astructure.SurfaceValue{
-			Text:  &text,
-			Tools: []astructure.ToolRef{{ID: "lookup"}},
-		},
-	})
-	assert.EqualError(t, err, "tool surface value contains non-tool fields")
-	_, err = expandToolSurface(astructure.Surface{
-		SurfaceID: "node_1#tool",
-		NodeID:    "node_1",
-		Type:      astructure.SurfaceTypeTool,
-		Value: astructure.SurfaceValue{
-			Tools: []astructure.ToolRef{{ID: "lookup"}, {ID: "lookup"}},
-		},
-	})
-	assert.EqualError(t, err, `duplicate tool surface id "node_1#tool.lookup"`)
-	_, err = expandToolSurface(astructure.Surface{
-		SurfaceID: "node_1#tool",
-		NodeID:    "node_1",
-		Type:      astructure.SurfaceTypeTool,
-		Value: astructure.SurfaceValue{
-			Tools: []astructure.ToolRef{
-				{ID: "lookup"},
-				{},
-			},
-		},
-	})
-	assert.EqualError(t, err, "tool id is empty")
-	_, err = canonicalToolSurfaceID(astructure.Surface{
-		SurfaceID: "node_1#tool",
-		NodeID:    "node_1",
-		Type:      astructure.SurfaceTypeTool,
-		Value:     astructure.SurfaceValue{Tools: []astructure.ToolRef{{}}},
-	})
-	assert.EqualError(t, err, "tool id is empty")
-	_, err = canonicalToolSurfaceID(astructure.Surface{
-		SurfaceID: "node_1#tool",
-		NodeID:    "node_1",
-		Type:      astructure.SurfaceTypeTool,
-	})
-	assert.EqualError(t, err, "tool surface must contain exactly one tool, got 0")
-}
-
-func TestBuildKnownSurfaceIDsValidation(t *testing.T) {
-	nodes := map[string]astructure.Node{
-		"node_1": {NodeID: "node_1"},
-	}
-	known, err := buildKnownSurfaceIDs([]astructure.Surface{
-		{
-			SurfaceID: "node_1#instruction",
-			NodeID:    "node_1",
-		},
-		{
-			SurfaceID: "node_1#tool.search",
-			NodeID:    "node_1",
-		},
-	}, nodes)
-	assert.NoError(t, err)
-	assert.Equal(t, map[string]struct{}{
-		"node_1#instruction": {},
-		"node_1#tool.search": {},
-	}, known)
-	known, err = buildKnownSurfaceIDs([]astructure.Surface{
-		{
-			NodeID: "node_1",
-		},
-	}, nodes)
-	assert.Nil(t, known)
-	assert.EqualError(t, err, "surface id is empty")
-	known, err = buildKnownSurfaceIDs([]astructure.Surface{
-		{
-			SurfaceID: "node_1#instruction",
-		},
-	}, nodes)
-	assert.Nil(t, known)
-	assert.EqualError(t, err, "surface node id is empty")
-	known, err = buildKnownSurfaceIDs([]astructure.Surface{
-		{
-			SurfaceID: "unknown#instruction",
-			NodeID:    "unknown",
-		},
-	}, nodes)
-	assert.Nil(t, known)
-	assert.EqualError(t, err, `surface "unknown#instruction" references unknown node id "unknown"`)
-	known, err = buildKnownSurfaceIDs([]astructure.Surface{
-		{
-			SurfaceID: "node_1#instruction",
-			NodeID:    "node_1",
-		},
-		{
-			SurfaceID: "node_1#instruction",
-			NodeID:    "node_1",
-		},
-	}, nodes)
-	assert.Nil(t, known)
-	assert.EqualError(t, err, `duplicate surface id "node_1#instruction"`)
+	assert.NotContains(t, state.SurfaceIndex, "node_1#tool.lookup")
+	assert.Contains(t, state.KnownSurfaceIDs, "node_1#tool.lookup")
 }
 
 func TestNormalizeProfileApplyPatchSetAndScopeHelpers(t *testing.T) {
-	structure, err := newStructureState(testStructureSnapshot(t))
+	structure, err := profilecompiler.NewStructure(testStructureSnapshot(t))
+	require.NoError(t, err)
+	profile, err := normalizeProfile(structure, nil)
 	assert.NoError(t, err)
-	structureID := structure.snapshot.StructureID
-	profile, err := normalizeProfile(nil, nil)
+	require.NotNil(t, profile)
+	assert.Equal(t, structure.Snapshot.StructureID, profile.StructureID)
+	assert.Empty(t, profile.Overrides)
+	profile, err = normalizeProfile(structure, &promptiter.Profile{StructureID: "other"})
 	assert.Nil(t, profile)
-	assert.EqualError(t, err, "structure state is nil")
+	assert.Contains(t, err.Error(), `profile structure id "other" does not match structure id`)
 	profile, err = normalizeProfile(structure, &promptiter.Profile{
-		StructureID: "other",
+		Overrides: []promptiter.SurfaceOverride{{SurfaceID: ""}},
 	})
 	assert.Nil(t, profile)
-	assert.EqualError(t, err, `profile structure id "other" does not match structure id "`+structureID+`"`)
+	assert.EqualError(t, err, "profile override surface id is empty")
 	profile, err = normalizeProfile(structure, &promptiter.Profile{
 		Overrides: []promptiter.SurfaceOverride{
-			{SurfaceID: "unknown"},
-		},
-	})
-	assert.Nil(t, profile)
-	assert.EqualError(t, err, `profile override surface id "unknown" is unknown`)
-	profile, err = normalizeProfile(structure, &promptiter.Profile{
-		StructureID: structureID,
-		Overrides: []promptiter.SurfaceOverride{
-			{
-				SurfaceID: testSurfaceID,
-				Value: astructure.SurfaceValue{
-					Text: stringPtr("base prompt"),
-				},
-			},
-			{
-				SurfaceID: testSurfaceID,
-				Value: astructure.SurfaceValue{
-					Text: stringPtr("mutated prompt"),
-				},
-			},
+			{SurfaceID: testSurfaceID, Value: astructure.SurfaceValue{Text: stringPtr("base prompt")}},
+			{SurfaceID: testSurfaceID, Value: astructure.SurfaceValue{Text: stringPtr("mutated prompt")}},
 		},
 	})
 	assert.Nil(t, profile)
 	assert.EqualError(t, err, `duplicate profile override surface id "node_1#instruction"`)
-	profile, err = normalizeProfile(structure, &promptiter.Profile{
-		StructureID: structureID,
+	profile = &promptiter.Profile{
+		StructureID: structure.Snapshot.StructureID,
 		Overrides: []promptiter.SurfaceOverride{
 			{
 				SurfaceID: testSurfaceID,
@@ -3089,15 +2773,16 @@ func TestNormalizeProfileApplyPatchSetAndScopeHelpers(t *testing.T) {
 				},
 			},
 		},
-	})
+	}
+	normalized, err := normalizeProfile(structure, profile)
 	assert.NoError(t, err)
-	require.NotNil(t, profile)
-	assert.Equal(t, structureID, profile.StructureID)
-	require.Len(t, profile.Overrides, 1)
-	assert.Equal(t, "mutated prompt", *profile.Overrides[0].Value.Text)
+	require.NotNil(t, normalized)
+	assert.Equal(t, structure.Snapshot.StructureID, normalized.StructureID)
+	require.Len(t, normalized.Overrides, 1)
+	assert.Equal(t, "mutated prompt", *normalized.Overrides[0].Value.Text)
 	applied, err := applyPatchSet(nil, nil, nil)
 	assert.Nil(t, applied)
-	assert.EqualError(t, err, "structure state is nil")
+	assert.EqualError(t, err, "normalize profile: structure is nil")
 	applied, err = applyPatchSet(structure, profile, &promptiter.PatchSet{
 		Patches: []promptiter.SurfacePatch{
 			{SurfaceID: ""},
@@ -3129,7 +2814,9 @@ func TestNormalizeProfileApplyPatchSetAndScopeHelpers(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	require.NotNil(t, applied)
-	assert.Empty(t, applied.Overrides)
+	require.Len(t, applied.Overrides, 1)
+	assert.Equal(t, testSurfaceID, applied.Overrides[0].SurfaceID)
+	assert.Equal(t, "base prompt", *applied.Overrides[0].Value.Text)
 	applied, err = applyPatchSet(structure, profile, &promptiter.PatchSet{
 		Patches: []promptiter.SurfacePatch{
 			{
@@ -3158,77 +2845,64 @@ func TestNormalizeProfileApplyPatchSetAndScopeHelpers(t *testing.T) {
 	})
 	assert.Nil(t, applied)
 	assert.EqualError(t, err, `sanitize patch "node_1#instruction": text is nil`)
-	surface, err := resolveProfileSurface(nil, nil, testSurfaceID)
-	assert.Equal(t, astructure.Surface{}, surface)
-	assert.EqualError(t, err, "structure state is nil")
-	surface, err = resolveProfileSurface(structure, nil, "unknown")
+	overrideIndex := buildOverrideIndex(normalized)
+	surface, err := resolveProfileSurface(structure, overrideIndex, "unknown")
 	assert.Equal(t, astructure.Surface{}, surface)
 	assert.EqualError(t, err, `surface id "unknown" is unknown`)
-	surface, err = resolveProfileSurface(structure, map[string]promptiter.SurfaceOverride{
-		testSurfaceID: {
-			SurfaceID: testSurfaceID,
-			Value: astructure.SurfaceValue{
-				Text: stringPtr("override"),
-			},
-		},
-	}, testSurfaceID)
+	surface, err = resolveProfileSurface(structure, overrideIndex, testSurfaceID)
 	assert.NoError(t, err)
-	assert.Equal(t, "override", *surface.Value.Text)
-	targets, err := compileTargetSurfaceIDs(nil, []string{testSurfaceID})
-	assert.Nil(t, targets)
-	assert.EqualError(t, err, "structure state is nil")
-	targets, err = compileTargetSurfaceIDs(nil, nil)
-	assert.Nil(t, targets)
-	assert.NoError(t, err)
-	targets, err = compileTargetSurfaceIDs(structure, nil)
-	assert.NoError(t, err)
-	assert.Nil(t, targets)
-	structureWithTool, err := newStructureState(testStructureSnapshotWithToolSurface(t))
-	assert.NoError(t, err)
-	targets, err = compileTargetSurfaceIDs(structureWithTool, nil)
-	assert.Nil(t, targets)
-	assert.NoError(t, err)
-	targets, err = compileTargetSurfaceIDs(structure, []string{})
+	assert.Equal(t, "mutated prompt", *surface.Value.Text)
+	targets, err := compileTargetSurfaceIDs(structure.SurfaceIndex, nil)
 	assert.Nil(t, targets)
 	assert.EqualError(t, err, "target surface ids must not be empty")
-	targets, err = compileTargetSurfaceIDs(structure, []string{""})
+	toolStructure, err := profilecompiler.NewStructure(testStructureSnapshotWithToolSurface(t))
+	require.NoError(t, err)
+	targets, err = compileTargetSurfaceIDs(toolStructure.SurfaceIndex, nil)
+	assert.Nil(t, targets)
+	assert.EqualError(t, err, "target surface ids must not be empty")
+	targets, err = compileTargetSurfaceIDs(structure.SurfaceIndex, []string{})
+	assert.Nil(t, targets)
+	assert.EqualError(t, err, "target surface ids must not be empty")
+	targets, err = compileTargetSurfaceIDs(structure.SurfaceIndex, []string{""})
 	assert.Nil(t, targets)
 	assert.EqualError(t, err, "target surface ids must not contain empty values")
-	targets, err = compileTargetSurfaceIDs(structure, []string{"unknown"})
+	targets, err = compileTargetSurfaceIDs(structure.SurfaceIndex, []string{"unknown"})
 	assert.Nil(t, targets)
 	assert.EqualError(t, err, `target surface id "unknown" is unknown`)
-	targets, err = compileTargetSurfaceIDs(structure, []string{testSurfaceID})
+	targets, err = compileTargetSurfaceIDs(structure.SurfaceIndex, []string{testSurfaceID})
 	assert.NoError(t, err)
 	assert.True(t, targets.contains(testSurfaceID))
 	assert.False(t, targets.contains("unknown"))
 	var nilTargets targetSurfaceSet
-	assert.True(t, nilTargets.contains(testSurfaceID))
-	assert.True(t, nilTargets.contains(testToolSurfaceID))
+	assert.False(t, nilTargets.contains(testSurfaceID))
 }
 
 func TestBackwardCoversAdditionalBranches(t *testing.T) {
-	structure, err := newStructureState(testStructureSnapshot(t))
-	assert.NoError(t, err)
+	profile := testRuntimeProfile(t)
+	structure, err := profilecompiler.NewStructure(testStructureSnapshot(t))
+	require.NoError(t, err)
+	overrideIndex := buildOverrideIndex(profile)
 	engineInstance := &engine{}
-	result, backwardErr := engineInstance.backward(context.Background(), structure, nil, nil, nil, nil, BackwardOptions{})
+	result, backwardErr := engineInstance.backward(context.Background(), structure, profile, nil, nil, nil, BackwardOptions{})
 	assert.Nil(t, result)
 	assert.EqualError(t, backwardErr, "backwarder is nil")
 	engineInstance.backwarder = &fakeBackwarder{}
-	result, backwardErr = engineInstance.backward(context.Background(), nil, nil, nil, nil, nil, BackwardOptions{})
-	assert.Nil(t, result)
-	assert.EqualError(t, backwardErr, "structure state is nil")
-	result, backwardErr = engineInstance.backward(context.Background(), structure, nil, &EvaluationResult{}, []promptiter.CaseLoss{
+	result, backwardErr = engineInstance.backward(context.Background(), structure, nil, nil, nil, nil, BackwardOptions{})
+	assert.NoError(t, backwardErr)
+	require.NotNil(t, result)
+	assert.Empty(t, result.Cases)
+	result, backwardErr = engineInstance.backward(context.Background(), structure, profile, &EvaluationResult{}, []promptiter.CaseLoss{
 		{EvalSetID: "train", EvalCaseID: "case_1"},
 	}, nil, BackwardOptions{})
 	assert.Nil(t, result)
 	assert.EqualError(t, backwardErr, `eval case "case_1" from eval set "train" is missing from training result`)
-	caseResult, backwardErr := engineInstance.backwardCase(context.Background(), structure, nil, CaseResult{
+	caseResult, backwardErr := engineInstance.backwardCase(context.Background(), structure, overrideIndex, CaseResult{
 		EvalSetID:  "train",
 		EvalCaseID: "case_1",
 	}, promptiter.CaseLoss{EvalSetID: "train", EvalCaseID: "case_1"}, nil)
 	assert.Nil(t, caseResult)
 	assert.EqualError(t, backwardErr, `trace is nil for eval case "case_1" in eval set "train"`)
-	caseResult, backwardErr = engineInstance.backwardCase(context.Background(), structure, nil, CaseResult{
+	caseResult, backwardErr = engineInstance.backwardCase(context.Background(), structure, overrideIndex, CaseResult{
 		EvalSetID:  "train",
 		EvalCaseID: "case_1",
 		Trace: &atrace.Trace{
@@ -3243,7 +2917,7 @@ func TestBackwardCoversAdditionalBranches(t *testing.T) {
 	}, nil)
 	assert.Nil(t, caseResult)
 	assert.EqualError(t, backwardErr, `terminal loss step id "missing" is not part of trace for eval case "case_1"`)
-	caseResult, backwardErr = engineInstance.backwardCase(context.Background(), structure, nil, CaseResult{
+	caseResult, backwardErr = engineInstance.backwardCase(context.Background(), structure, overrideIndex, CaseResult{
 		EvalSetID:  "train",
 		EvalCaseID: "case_1",
 		Trace: &atrace.Trace{
@@ -3269,7 +2943,7 @@ func TestBackwardCoversAdditionalBranches(t *testing.T) {
 			return nil, errors.New("boom")
 		},
 	}
-	caseResult, backwardErr = engineInstance.backwardCase(context.Background(), structure, nil, CaseResult{
+	caseResult, backwardErr = engineInstance.backwardCase(context.Background(), structure, overrideIndex, CaseResult{
 		EvalSetID:  "train",
 		EvalCaseID: "case_1",
 		Trace: &atrace.Trace{
@@ -3300,7 +2974,7 @@ func TestBackwardCoversAdditionalBranches(t *testing.T) {
 			}, nil
 		},
 	}
-	result, backwardErr = engineInstance.backward(context.Background(), structure, nil, &EvaluationResult{
+	result, backwardErr = engineInstance.backward(context.Background(), structure, profile, &EvaluationResult{
 		EvalSets: []EvalSetResult{{
 			EvalSetID: "train",
 			Cases: []CaseResult{{
@@ -3339,7 +3013,8 @@ func TestBackwardCoversAdditionalBranches(t *testing.T) {
 }
 
 func TestBackwardRunsEvalCasesInParallel(t *testing.T) {
-	structure, err := newStructureState(testStructureSnapshot(t))
+	profile := testRuntimeProfile(t)
+	structure, err := profilecompiler.NewStructure(testStructureSnapshot(t))
 	require.NoError(t, err)
 	previousGOMAXPROCS := runtime.GOMAXPROCS(2)
 	defer runtime.GOMAXPROCS(previousGOMAXPROCS)
@@ -3380,7 +3055,7 @@ func TestBackwardRunsEvalCasesInParallel(t *testing.T) {
 		result, runErr := engineInstance.backward(
 			context.Background(),
 			structure,
-			nil,
+			profile,
 			parallelBackwardTrainResult(),
 			parallelBackwardLosses(),
 			targetSurfaceSet{testSurfaceID: {}},
@@ -3724,7 +3399,7 @@ func TestLossStopAndEventHelpers(t *testing.T) {
 }
 
 func TestOptimizeHelpersAndLossValidation(t *testing.T) {
-	structure, err := newStructureState(testStructureSnapshot(t))
+	structure, err := profilecompiler.NewStructure(testStructureSnapshot(t))
 	assert.NoError(t, err)
 	engineInstance := &engine{optimizer: &fakeOptimizer{}}
 	patchSet, err := engineInstance.optimize(context.Background(), structure, nil, nil, nil, OptimizerOptions{})
@@ -3749,16 +3424,6 @@ func TestOptimizeHelpersAndLossValidation(t *testing.T) {
 	}, targetSurfaceSet{testSurfaceID: {}}, OptimizerOptions{})
 	assert.Nil(t, patchSet)
 	assert.EqualError(t, err, `optimize surface "node_1#instruction": boom`)
-	originalGradient := promptiter.AggregatedSurfaceGradient{
-		SurfaceID: testSurfaceID,
-		Gradients: []promptiter.SurfaceGradient{
-			{Gradient: "g1"},
-		},
-	}
-	clonedGradient := cloneAggregatedGradient(originalGradient)
-	clonedGradient.Gradients[0].Gradient = "mutated"
-	assert.Equal(t, "mutated", clonedGradient.Gradients[0].Gradient)
-	assert.Equal(t, "g1", originalGradient.Gradients[0].Gradient)
 	losses, err := (&engine{}).loss(nil)
 	assert.Nil(t, losses)
 	assert.EqualError(t, err, "evaluation result is nil")
@@ -3846,30 +3511,20 @@ func TestIndexCaseResultsAndNormalizeIncomingPackets(t *testing.T) {
 }
 
 func TestIndexTraceStepsValidationErrors(t *testing.T) {
-	structure, err := newStructureState(testStructureSnapshot(t))
-	assert.NoError(t, err)
-	index, err := indexTraceSteps(nil, &atrace.Trace{})
-	assert.Nil(t, index)
-	assert.EqualError(t, err, "structure state is nil")
-	index, err = indexTraceSteps(structure, nil)
+	index, err := indexTraceSteps(nil)
 	assert.Nil(t, index)
 	assert.EqualError(t, err, "trace is nil")
-	index, err = indexTraceSteps(structure, &atrace.Trace{
+	index, err = indexTraceSteps(&atrace.Trace{
 		Steps: []atrace.Step{{NodeID: "node_1"}},
 	})
 	assert.Nil(t, index)
 	assert.EqualError(t, err, "trace step id is empty")
-	index, err = indexTraceSteps(structure, &atrace.Trace{
+	index, err = indexTraceSteps(&atrace.Trace{
 		Steps: []atrace.Step{{StepID: "step_1"}},
 	})
 	assert.Nil(t, index)
 	assert.EqualError(t, err, `trace step "step_1" node id is empty`)
-	index, err = indexTraceSteps(structure, &atrace.Trace{
-		Steps: []atrace.Step{{StepID: "step_1", NodeID: "unknown"}},
-	})
-	assert.Nil(t, index)
-	assert.EqualError(t, err, `trace step "step_1" references unknown node id "unknown"`)
-	index, err = indexTraceSteps(structure, &atrace.Trace{
+	index, err = indexTraceSteps(&atrace.Trace{
 		Steps: []atrace.Step{
 			{StepID: "step_1", NodeID: "node_1"},
 			{StepID: "step_1", NodeID: "node_1"},
@@ -3877,14 +3532,14 @@ func TestIndexTraceStepsValidationErrors(t *testing.T) {
 	})
 	assert.Nil(t, index)
 	assert.EqualError(t, err, `duplicate trace step id "step_1"`)
-	index, err = indexTraceSteps(structure, &atrace.Trace{
+	index, err = indexTraceSteps(&atrace.Trace{
 		Steps: []atrace.Step{
 			{StepID: "step_1", NodeID: "node_1", PredecessorStepIDs: []string{""}},
 		},
 	})
 	assert.Nil(t, index)
 	assert.EqualError(t, err, `trace step "step_1" predecessor step id is empty`)
-	index, err = indexTraceSteps(structure, &atrace.Trace{
+	index, err = indexTraceSteps(&atrace.Trace{
 		Steps: []atrace.Step{
 			{StepID: "step_1", NodeID: "node_1", PredecessorStepIDs: []string{"missing"}},
 		},
@@ -3894,8 +3549,9 @@ func TestIndexTraceStepsValidationErrors(t *testing.T) {
 }
 
 func TestBuildBackwardRequestValidationErrors(t *testing.T) {
-	structure, err := newStructureState(testStructureSnapshot(t))
+	structure, err := profilecompiler.NewStructure(testStructureSnapshot(t))
 	assert.NoError(t, err)
+	overrideIndex := map[string]promptiter.SurfaceOverride{}
 	traceIndex := map[string]indexedTraceStep{
 		"step_1": {
 			step: atrace.Step{
@@ -3907,7 +3563,7 @@ func TestBuildBackwardRequestValidationErrors(t *testing.T) {
 	}
 	request, err := buildBackwardRequest(
 		structure,
-		nil,
+		overrideIndex,
 		traceIndex,
 		CaseResult{EvalSetID: "train", EvalCaseID: "case_1"},
 		atrace.Step{
@@ -3921,7 +3577,7 @@ func TestBuildBackwardRequestValidationErrors(t *testing.T) {
 	assert.EqualError(t, err, `step "step_2" references unknown node id "unknown"`)
 	request, err = buildBackwardRequest(
 		structure,
-		nil,
+		overrideIndex,
 		traceIndex,
 		CaseResult{EvalSetID: "train", EvalCaseID: "case_1"},
 		atrace.Step{
@@ -3936,7 +3592,7 @@ func TestBuildBackwardRequestValidationErrors(t *testing.T) {
 	assert.EqualError(t, err, `step "step_2" applied surface id is empty`)
 	request, err = buildBackwardRequest(
 		structure,
-		nil,
+		overrideIndex,
 		traceIndex,
 		CaseResult{EvalSetID: "train", EvalCaseID: "case_1"},
 		atrace.Step{
@@ -3948,10 +3604,10 @@ func TestBuildBackwardRequestValidationErrors(t *testing.T) {
 		nil,
 	)
 	assert.Nil(t, request)
-	assert.EqualError(t, err, `surface id "node_1#missing" is unknown`)
+	assert.EqualError(t, err, `step "step_2" applied surface id "node_1#missing" is unknown`)
 	request, err = buildBackwardRequest(
 		structure,
-		nil,
+		overrideIndex,
 		traceIndex,
 		CaseResult{EvalSetID: "train", EvalCaseID: "case_1"},
 		atrace.Step{
@@ -3966,7 +3622,7 @@ func TestBuildBackwardRequestValidationErrors(t *testing.T) {
 	assert.EqualError(t, err, `step "step_2" predecessor step id "missing" is unknown`)
 	request, err = buildBackwardRequest(
 		structure,
-		nil,
+		overrideIndex,
 		traceIndex,
 		CaseResult{EvalSetID: "train", EvalCaseID: "case_1"},
 		atrace.Step{
@@ -3982,11 +3638,11 @@ func TestBuildBackwardRequestValidationErrors(t *testing.T) {
 }
 
 func TestBuildBackwardRequestKeepsSupportedToolAppliedSurfaces(t *testing.T) {
-	structure, err := newStructureState(testStructureSnapshotWithToolSurface(t))
+	structure, err := profilecompiler.NewStructure(testStructureSnapshotWithToolSurface(t))
 	assert.NoError(t, err)
 	request, err := buildBackwardRequest(
 		structure,
-		nil,
+		map[string]promptiter.SurfaceOverride{},
 		nil,
 		CaseResult{EvalSetID: "train", EvalCaseID: "case_1"},
 		atrace.Step{
@@ -4008,16 +3664,17 @@ func TestBuildBackwardRequestKeepsSupportedToolAppliedSurfaces(t *testing.T) {
 func TestRunRejectsEmptyTargetSurfaceIDs(t *testing.T) {
 	engineInstance, err := New(
 		context.Background(),
-		testTargetAgent(),
-		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
-		&fakeBackwarder{},
-		&fakeAggregator{},
-		&fakeOptimizer{},
+		WithAgentEvaluator(newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome))),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(testTargetAgent()),
 	)
 	assert.NoError(t, err)
 	_, err = engineInstance.Run(context.Background(), &RunRequest{
 		Train:            testEvalSetInputs("train"),
 		Validation:       testEvalSetInputs("validation"),
+		InitialProfile:   testRuntimeProfile(t),
 		TargetSurfaceIDs: []string{},
 		MaxRounds:        1,
 	})
@@ -4028,16 +3685,17 @@ func TestRunRejectsEmptyTargetSurfaceIDs(t *testing.T) {
 func TestRunRejectsUnknownTargetSurfaceID(t *testing.T) {
 	engineInstance, err := New(
 		context.Background(),
-		testTargetAgent(),
-		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
-		&fakeBackwarder{},
-		&fakeAggregator{},
-		&fakeOptimizer{},
+		WithAgentEvaluator(newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome))),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(testTargetAgent()),
 	)
 	assert.NoError(t, err)
 	_, err = engineInstance.Run(context.Background(), &RunRequest{
 		Train:            testEvalSetInputs("train"),
 		Validation:       testEvalSetInputs("validation"),
+		InitialProfile:   testRuntimeProfile(t),
 		TargetSurfaceIDs: []string{"unknown#instruction"},
 		MaxRounds:        1,
 	})
@@ -4048,11 +3706,11 @@ func TestRunRejectsUnknownTargetSurfaceID(t *testing.T) {
 func TestNewRejectsMissingAgentEvaluator(t *testing.T) {
 	engineInstance, err := New(
 		context.Background(),
-		testTargetAgent(),
-		nil,
-		&fakeBackwarder{},
-		&fakeAggregator{},
-		&fakeOptimizer{},
+		WithAgentEvaluator(nil),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(testTargetAgent()),
 	)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "agent evaluator is nil")
@@ -4062,11 +3720,11 @@ func TestNewRejectsMissingAgentEvaluator(t *testing.T) {
 func TestNewRejectsMissingBackwarder(t *testing.T) {
 	engineInstance, err := New(
 		context.Background(),
-		testTargetAgent(),
-		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
-		nil,
-		&fakeAggregator{},
-		&fakeOptimizer{},
+		WithAgentEvaluator(newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome))),
+		WithBackwarder(nil),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(testTargetAgent()),
 	)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "backwarder is nil")
@@ -4076,11 +3734,11 @@ func TestNewRejectsMissingBackwarder(t *testing.T) {
 func TestNewRejectsMissingAggregator(t *testing.T) {
 	engineInstance, err := New(
 		context.Background(),
-		testTargetAgent(),
-		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
-		&fakeBackwarder{},
-		nil,
-		&fakeOptimizer{},
+		WithAgentEvaluator(newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome))),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(nil),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(testTargetAgent()),
 	)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "aggregator is nil")
@@ -4090,61 +3748,72 @@ func TestNewRejectsMissingAggregator(t *testing.T) {
 func TestNewRejectsMissingOptimizer(t *testing.T) {
 	engineInstance, err := New(
 		context.Background(),
-		testTargetAgent(),
-		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
-		&fakeBackwarder{},
-		&fakeAggregator{},
-		nil,
+		WithAgentEvaluator(newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome))),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(nil),
+		WithAgent(testTargetAgent()),
 	)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "optimizer is nil")
 	assert.Nil(t, engineInstance)
 }
 
-func TestNewRejectsMissingTargetAgent(t *testing.T) {
+func TestNewRejectsMissingAgentOrStructure(t *testing.T) {
 	engineInstance, err := New(
 		context.Background(),
-		nil,
-		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
-		&fakeBackwarder{},
-		&fakeAggregator{},
-		&fakeOptimizer{},
+		WithAgentEvaluator(newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome))),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(nil),
 	)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "target agent is nil")
 	assert.Nil(t, engineInstance)
+	assert.EqualError(t, err, "agent or structure is nil")
 }
 
-func TestDescribeRejectsMissingTargetAgent(t *testing.T) {
+func TestNewRejectsAgentAndStructure(t *testing.T) {
+	engineInstance, err := New(
+		context.Background(),
+		WithAgentEvaluator(newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome))),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(testTargetAgent()),
+		WithStructure(testStructureSnapshot(t)),
+	)
+	assert.Nil(t, engineInstance)
+	assert.EqualError(t, err, "agent and structure cannot both be set")
+}
+
+func TestDescribeRejectsMissingAgentOrStructure(t *testing.T) {
 	engineInstance := &engine{}
 	snapshot, err := engineInstance.Describe(context.Background())
 	assert.Nil(t, snapshot)
-	assert.EqualError(t, err, "target agent is nil")
+	assert.EqualError(t, err, "agent or structure is nil")
 }
 
-func TestDescribeRejectsInvalidProjectedStructure(t *testing.T) {
+func TestDescribeRejectsInvalidInjectedStructure(t *testing.T) {
 	engineInstance := &engine{
-		targetAgent: &fakeStructureAgent{
-			snapshot: &astructure.Snapshot{
-				StructureID: "structure_1",
-				EntryNodeID: "node_1",
-				Nodes: []astructure.Node{
-					{NodeID: "node_1", Kind: astructure.NodeKindLLM},
+		structure: &astructure.Snapshot{
+			StructureID: "structure_1",
+			EntryNodeID: "node_1",
+			Nodes: []astructure.Node{
+				{NodeID: "node_1", Kind: astructure.NodeKindLLM},
+			},
+			Surfaces: []astructure.Surface{
+				{
+					SurfaceID: "node_1#global_instruction",
+					NodeID:    "node_1",
+					Type:      astructure.SurfaceTypeGlobalInstruction,
+					Value:     astructure.SurfaceValue{Text: stringPtr("global")},
 				},
-				Surfaces: []astructure.Surface{
-					{
-						SurfaceID: "node_1#global_instruction",
-						NodeID:    "node_1",
-						Type:      astructure.SurfaceTypeGlobalInstruction,
-						Value:     astructure.SurfaceValue{Text: stringPtr("global")},
-					},
-					{
-						SurfaceID: "node_1#tool",
-						NodeID:    "node_1",
-						Type:      astructure.SurfaceTypeTool,
-						Value: astructure.SurfaceValue{
-							Tools: []astructure.ToolRef{{}},
-						},
+				{
+					SurfaceID: "node_1#tool",
+					NodeID:    "node_1",
+					Type:      astructure.SurfaceTypeTool,
+					Value: astructure.SurfaceValue{
+						Tools: []astructure.ToolRef{{}},
 					},
 				},
 			},
@@ -4152,27 +3821,28 @@ func TestDescribeRejectsInvalidProjectedStructure(t *testing.T) {
 	}
 	snapshot, err := engineInstance.Describe(context.Background())
 	assert.Nil(t, snapshot)
-	assert.EqualError(t, err, `surface "node_1#tool" is invalid: tool id is empty`)
+	assert.EqualError(t, err, `create structure: surface "node_1#tool" is invalid: tool id is empty`)
 }
 
-func TestRunRejectsStructureExportFailure(t *testing.T) {
+func TestRunPropagatesStructureExportError(t *testing.T) {
 	engineInstance, err := New(
 		context.Background(),
-		&fakeStructureAgent{exportErr: errors.New("boom")},
-		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
-		&fakeBackwarder{},
-		&fakeAggregator{},
-		&fakeOptimizer{},
+		WithAgentEvaluator(newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome))),
+		WithBackwarder(&fakeBackwarder{}),
+		WithAggregator(&fakeAggregator{}),
+		WithOptimizer(&fakeOptimizer{}),
+		WithAgent(&fakeStructureAgent{exportErr: errors.New("boom")}),
 	)
 	assert.NoError(t, err)
-	_, err = engineInstance.Run(context.Background(), &RunRequest{
-		Train:      testEvalSetInputs("train"),
-		Validation: testEvalSetInputs("validation"),
-		MaxRounds:  1,
+	result, err := engineInstance.Run(context.Background(), &RunRequest{
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		InitialProfile:   testRuntimeProfile(t),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{testSurfaceID},
 	})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "describe structure")
-	assert.Contains(t, err.Error(), "boom")
+	assert.Nil(t, result)
+	assert.EqualError(t, err, "export structure: boom")
 }
 
 func TestLossUsesTraceTerminalStep(t *testing.T) {
@@ -4697,10 +4367,10 @@ func testStructureSnapshotWithToolSurface(t *testing.T) *astructure.Snapshot {
 	return snapshot
 }
 
-func twoSurfaceStructure(t *testing.T) (*structureState, string) {
+func twoSurfaceStructure(t *testing.T) (*profilecompiler.Structure, string) {
 	t.Helper()
 	secondSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeGlobalInstruction)
-	structure, err := newStructureState(&astructure.Snapshot{
+	structure, err := profilecompiler.NewStructure(&astructure.Snapshot{
 		StructureID: "structure_1",
 		EntryNodeID: "node_1",
 		Nodes: []astructure.Node{
@@ -4723,6 +4393,79 @@ func twoSurfaceStructure(t *testing.T) (*structureState, string) {
 	})
 	require.NoError(t, err)
 	return structure, secondSurfaceID
+}
+
+func testRuntimeProfile(t *testing.T) *promptiter.Profile {
+	t.Helper()
+	return &promptiter.Profile{
+		Overrides: []promptiter.SurfaceOverride{
+			{
+				SurfaceID: testSurfaceID,
+				Value:     astructure.SurfaceValue{Text: stringPtr("base prompt")},
+			},
+		},
+	}
+}
+
+func testRuntimeProfileWithTool(t *testing.T) *promptiter.Profile {
+	t.Helper()
+	return &promptiter.Profile{
+		Overrides: []promptiter.SurfaceOverride{
+			{
+				SurfaceID: testSurfaceID,
+				Value:     astructure.SurfaceValue{Text: stringPtr("base prompt")},
+			},
+			{
+				SurfaceID: testToolSurfaceID,
+				Value: astructure.SurfaceValue{
+					Tools: []astructure.ToolRef{{ID: "bad_tool", Description: "bad"}},
+				},
+			},
+		},
+	}
+}
+
+func runtimeProfileFromSnapshot(t *testing.T, snapshot *astructure.Snapshot) *promptiter.Profile {
+	t.Helper()
+	structure, err := profilecompiler.NewStructure(snapshot)
+	require.NoError(t, err)
+	return runtimeProfileFromStructure(t, structure)
+}
+
+func runtimeProfileFromStructure(t *testing.T, structure *profilecompiler.Structure) *promptiter.Profile {
+	t.Helper()
+	require.NotNil(t, structure)
+	overrides := make([]promptiter.SurfaceOverride, 0, len(structure.SurfaceIndex))
+	for _, surface := range structure.Snapshot.Surfaces {
+		if _, ok := structure.SurfaceIndex[surface.SurfaceID]; !ok {
+			continue
+		}
+		overrides = append(overrides, promptiter.SurfaceOverride{
+			SurfaceID: surface.SurfaceID,
+			Value:     surface.Value,
+		})
+	}
+	return &promptiter.Profile{
+		StructureID: structure.Snapshot.StructureID,
+		Overrides:   overrides,
+	}
+}
+
+func surfaceIndexFromStructure(t *testing.T, structure *profilecompiler.Structure) map[string]astructure.Surface {
+	t.Helper()
+	require.NotNil(t, structure)
+	return structure.SurfaceIndex
+}
+
+func profileOverride(t *testing.T, profile *promptiter.Profile, surfaceID string) *promptiter.SurfaceOverride {
+	t.Helper()
+	for i := range profile.Overrides {
+		if profile.Overrides[i].SurfaceID == surfaceID {
+			return &profile.Overrides[i]
+		}
+	}
+	require.FailNowf(t, "missing profile override", "surface id %q not found", surfaceID)
+	return nil
 }
 
 func parallelBackwardTrainResult() *EvaluationResult {
@@ -4884,10 +4627,15 @@ func testTargetAgentWithToolSurface() agent.Agent {
 }
 
 func profileText(profile *promptiter.Profile) string {
-	if profile == nil || len(profile.Overrides) == 0 || profile.Overrides[0].Value.Text == nil {
+	if profile == nil {
 		return "base prompt"
 	}
-	return *profile.Overrides[0].Value.Text
+	for _, override := range profile.Overrides {
+		if override.SurfaceID == testSurfaceID && override.Value.Text != nil {
+			return *override.Value.Text
+		}
+	}
+	return "base prompt"
 }
 
 func profileToolDescription(profile *promptiter.Profile, surfaceID string) string {

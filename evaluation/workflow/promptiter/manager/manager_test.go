@@ -165,6 +165,18 @@ func testEvalSetInputs(evalSetID string) []promptiterengine.EvalSetInput {
 	}
 }
 
+func testInitialProfile() *promptiter.Profile {
+	return &promptiter.Profile{
+		StructureID: "structure_1",
+		Overrides: []promptiter.SurfaceOverride{
+			{
+				SurfaceID: "candidate#instruction",
+				Value:     astructure.SurfaceValue{Text: stringPtr("prompt")},
+			},
+		},
+	}
+}
+
 func TestManagerStartAndGetReturnRun(t *testing.T) {
 	engineInstance := &fakePromptIterEngine{
 		run: func(ctx context.Context, request *promptiterengine.RunRequest, opts ...promptiterengine.Option) (*promptiterengine.RunResult, error) {
@@ -172,7 +184,6 @@ func TestManagerStartAndGetReturnRun(t *testing.T) {
 			require.NotNil(t, request)
 			require.Len(t, opts, 1)
 			return &promptiterengine.RunResult{
-				Structure:          &astructure.Snapshot{StructureID: "structure_1", EntryNodeID: "node_1"},
 				BaselineValidation: newEvaluationResult(0.62),
 				AcceptedProfile:    &promptiter.Profile{StructureID: "structure_1"},
 				Rounds: []promptiterengine.RoundResult{
@@ -198,6 +209,7 @@ func TestManagerStartAndGetReturnRun(t *testing.T) {
 	run, err := managerInstance.Start(context.Background(), &promptiterengine.RunRequest{
 		Train:            testEvalSetInputs("train"),
 		Validation:       testEvalSetInputs("validation"),
+		InitialProfile:   testInitialProfile(),
 		MaxRounds:        1,
 		TargetSurfaceIDs: []string{"candidate#instruction"},
 	})
@@ -217,8 +229,6 @@ func TestManagerStartAndGetReturnRun(t *testing.T) {
 	assert.Equal(t, "demo-app", current.AppName)
 	assert.Equal(t, run.ID, current.ID)
 	assert.Equal(t, promptiterengine.RunStatusSucceeded, current.Status)
-	require.NotNil(t, current.Structure)
-	assert.Equal(t, "structure_1", current.Structure.StructureID)
 	require.NotNil(t, current.BaselineValidation)
 	assert.InDelta(t, 0.62, current.BaselineValidation.OverallScore, 0.0001)
 	require.NotNil(t, current.AcceptedProfile)
@@ -240,24 +250,26 @@ func TestManagerStartStoresFinalSlimmedRun(t *testing.T) {
 			_ = request
 			_ = opts
 			return &promptiterengine.RunResult{
-				Structure: &astructure.Snapshot{StructureID: "structure_1", EntryNodeID: "node_1"},
-				Status:    promptiterengine.RunStatusSucceeded,
+				Status:          promptiterengine.RunStatusSucceeded,
+				AcceptedProfile: &promptiter.Profile{StructureID: "structure_1"},
 			}, nil
 		},
 	}
 	managerInstance, err := New(
 		"demo-app",
 		engineInstance,
-		WithStoredResultSlimming(promptiterengine.RunResultSlimming{OmitStructure: true}),
+		WithStoredResultSlimming(promptiterengine.RunResultSlimming{OmitProfiles: true}),
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, managerInstance.Close())
 	})
 	run, err := managerInstance.Start(context.Background(), &promptiterengine.RunRequest{
-		Train:      testEvalSetInputs("train"),
-		Validation: testEvalSetInputs("validation"),
-		MaxRounds:  1,
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		InitialProfile:   testInitialProfile(),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{"candidate#instruction"},
 	})
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
@@ -267,7 +279,7 @@ func TestManagerStartStoresFinalSlimmedRun(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 	current, err := managerInstance.Get(context.Background(), run.ID)
 	require.NoError(t, err)
-	assert.Nil(t, current.Structure)
+	assert.Nil(t, current.AcceptedProfile)
 }
 
 func TestSlimRunResultOmitsConfiguredFields(t *testing.T) {
@@ -275,7 +287,6 @@ func TestSlimRunResultOmitsConfiguredFields(t *testing.T) {
 		ID:           "run-1",
 		Status:       promptiterengine.RunStatusSucceeded,
 		CurrentRound: 1,
-		Structure:    &astructure.Snapshot{StructureID: "structure_1", EntryNodeID: "node_1"},
 		BaselineValidation: &promptiterengine.EvaluationResult{
 			OverallScore: 0.5,
 			EvalSets: []promptiterengine.EvalSetResult{
@@ -322,9 +333,8 @@ func TestSlimRunResultOmitsConfiguredFields(t *testing.T) {
 		},
 	}
 	assert.Same(t, result, slimRunResult(result, promptiterengine.RunResultSlimming{}))
-	assert.Nil(t, slimRunResult(nil, promptiterengine.RunResultSlimming{OmitStructure: true}))
+	assert.Nil(t, slimRunResult(nil, promptiterengine.RunResultSlimming{OmitProfiles: true}))
 	slimmed := slimRunResult(result, promptiterengine.RunResultSlimming{
-		OmitStructure:       true,
 		OmitEvaluationCases: true,
 		OmitBackward:        true,
 		OmitAggregation:     true,
@@ -333,7 +343,6 @@ func TestSlimRunResultOmitsConfiguredFields(t *testing.T) {
 		OmitLosses:          true,
 	})
 	require.NotSame(t, result, slimmed)
-	assert.Nil(t, slimmed.Structure)
 	assert.Nil(t, slimmed.AcceptedProfile)
 	require.NotNil(t, slimmed.BaselineValidation)
 	require.Len(t, slimmed.BaselineValidation.EvalSets, 1)
@@ -351,7 +360,6 @@ func TestSlimRunResultOmitsConfiguredFields(t *testing.T) {
 	assert.Empty(t, round.Train.EvalSets[0].Cases)
 	require.NotNil(t, round.Acceptance)
 	require.NotNil(t, round.Stop)
-	require.NotNil(t, result.Structure)
 	require.Len(t, result.BaselineValidation.EvalSets[0].Cases, 1)
 	require.NotNil(t, result.Rounds[0].Backward)
 }
@@ -376,9 +384,11 @@ func TestManagerCancelTransitionsRun(t *testing.T) {
 		require.NoError(t, managerInstance.Close())
 	})
 	run, err := managerInstance.Start(context.Background(), &promptiterengine.RunRequest{
-		Train:      testEvalSetInputs("train"),
-		Validation: testEvalSetInputs("validation"),
-		MaxRounds:  1,
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		InitialProfile:   testInitialProfile(),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{"candidate#instruction"},
 	})
 	require.NoError(t, err)
 	require.NoError(t, managerInstance.Cancel(context.Background(), run.ID))
@@ -643,10 +653,6 @@ func TestRunObserverBuildsIncrementalRun(t *testing.T) {
 		run:     run,
 	}
 	require.NoError(t, observer.append(context.Background(), &promptiterengine.Event{
-		Kind:    promptiterengine.EventKindStructureSnapshot,
-		Payload: &astructure.Snapshot{StructureID: "structure_1", EntryNodeID: "node_1"},
-	}))
-	require.NoError(t, observer.append(context.Background(), &promptiterengine.Event{
 		Kind:    promptiterengine.EventKindBaselineValidation,
 		Payload: newEvaluationResult(0.55),
 	}))
@@ -721,8 +727,6 @@ func TestRunObserverBuildsIncrementalRun(t *testing.T) {
 	current, err := concreteManager.Get(context.Background(), run.ID)
 	require.NoError(t, err)
 	require.NotNil(t, current)
-	require.NotNil(t, current.Structure)
-	assert.Equal(t, "structure_1", current.Structure.StructureID)
 	require.NotNil(t, current.BaselineValidation)
 	assert.InDelta(t, 0.55, current.BaselineValidation.OverallScore, 0.0001)
 	require.Len(t, current.Rounds, 1)
@@ -782,7 +786,6 @@ func TestRunObserverStoresSlimmedCopy(t *testing.T) {
 	managerInstance, err := New("demo-app", &fakePromptIterEngine{},
 		WithStore(store),
 		WithStoredResultSlimming(promptiterengine.RunResultSlimming{
-			OmitStructure:       true,
 			OmitEvaluationCases: true,
 		}),
 	)
@@ -802,10 +805,6 @@ func TestRunObserverStoresSlimmedCopy(t *testing.T) {
 		run:     run,
 	}
 	require.NoError(t, observer.append(context.Background(), &promptiterengine.Event{
-		Kind:    promptiterengine.EventKindStructureSnapshot,
-		Payload: &astructure.Snapshot{StructureID: "structure_1", EntryNodeID: "node_1"},
-	}))
-	require.NoError(t, observer.append(context.Background(), &promptiterengine.Event{
 		Kind: promptiterengine.EventKindBaselineValidation,
 		Payload: &promptiterengine.EvaluationResult{
 			OverallScore: 0.55,
@@ -821,11 +820,9 @@ func TestRunObserverStoresSlimmedCopy(t *testing.T) {
 		},
 	}))
 
-	require.NotNil(t, observer.run.Structure)
 	require.NotNil(t, observer.run.BaselineValidation)
 	require.Len(t, observer.run.BaselineValidation.EvalSets[0].Cases, 1)
 	require.NotNil(t, store.updateRun)
-	assert.Nil(t, store.updateRun.Structure)
 	require.NotNil(t, store.updateRun.BaselineValidation)
 	require.Len(t, store.updateRun.BaselineValidation.EvalSets, 1)
 	assert.Empty(t, store.updateRun.BaselineValidation.EvalSets[0].Cases)
@@ -853,14 +850,6 @@ func TestRunObserverRejectsInvalidEvents(t *testing.T) {
 		event      *promptiterengine.Event
 		errContain string
 	}{
-		{
-			name: "invalid structure payload",
-			event: &promptiterengine.Event{
-				Kind:    promptiterengine.EventKindStructureSnapshot,
-				Payload: "invalid",
-			},
-			errContain: `event "structure_snapshot" payload is invalid`,
-		},
 		{
 			name: "invalid baseline payload",
 			event: &promptiterengine.Event{
@@ -1019,9 +1008,11 @@ func TestManagerStartRejectsClosedManager(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, managerInstance.Close())
 	run, err := managerInstance.Start(context.Background(), &promptiterengine.RunRequest{
-		Train:      testEvalSetInputs("train"),
-		Validation: testEvalSetInputs("validation"),
-		MaxRounds:  1,
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		InitialProfile:   testInitialProfile(),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{"candidate#instruction"},
 	})
 	assert.Nil(t, run)
 	assert.EqualError(t, err, "promptiter manager is closed")
@@ -1054,9 +1045,11 @@ func TestManagerStartReturnsCreateError(t *testing.T) {
 		require.NoError(t, managerInstance.Close())
 	})
 	run, err := managerInstance.Start(context.Background(), &promptiterengine.RunRequest{
-		Train:      testEvalSetInputs("train"),
-		Validation: testEvalSetInputs("validation"),
-		MaxRounds:  1,
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		InitialProfile:   testInitialProfile(),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{"candidate#instruction"},
 	})
 	assert.Nil(t, run)
 	assert.ErrorContains(t, err, "create run")
@@ -1304,8 +1297,10 @@ func TestValidateRunRequest(t *testing.T) {
 				EvalSetID: "train",
 			},
 		},
-		Validation: testEvalSetInputs("validation"),
-		MaxRounds:  1,
+		Validation:       testEvalSetInputs("validation"),
+		InitialProfile:   testInitialProfile(),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{"candidate#instruction"},
 	}))
 	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
 		Train: []promptiterengine.EvalSetInput{
@@ -1400,9 +1395,18 @@ func TestValidateRunRequest(t *testing.T) {
 		TargetSurfaceIDs: []string{},
 	}), "target surface ids must not be empty")
 	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{""},
+	}), "target surface ids must not contain empty values")
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
 		Train:      testEvalSetInputs("train"),
 		Validation: testEvalSetInputs("validation"),
 		MaxRounds:  1,
+		TargetSurfaceIDs: []string{
+			"candidate#instruction",
+		},
 		BackwardOptions: promptiterengine.BackwardOptions{
 			CaseParallelism: -1,
 		},
@@ -1411,6 +1415,9 @@ func TestValidateRunRequest(t *testing.T) {
 		Train:      testEvalSetInputs("train"),
 		Validation: testEvalSetInputs("validation"),
 		MaxRounds:  1,
+		TargetSurfaceIDs: []string{
+			"candidate#instruction",
+		},
 		AggregationOptions: promptiterengine.AggregationOptions{
 			SurfaceParallelism: -1,
 		},
@@ -1419,6 +1426,9 @@ func TestValidateRunRequest(t *testing.T) {
 		Train:      testEvalSetInputs("train"),
 		Validation: testEvalSetInputs("validation"),
 		MaxRounds:  1,
+		TargetSurfaceIDs: []string{
+			"candidate#instruction",
+		},
 		OptimizerOptions: promptiterengine.OptimizerOptions{
 			SurfaceParallelism: -1,
 		},
@@ -1426,6 +1436,13 @@ func TestValidateRunRequest(t *testing.T) {
 	assert.NoError(t, validateRunRequest(&promptiterengine.RunRequest{
 		Train:            testEvalSetInputs("train"),
 		Validation:       testEvalSetInputs("validation"),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{"candidate#instruction"},
+	}))
+	assert.NoError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		InitialProfile:   testInitialProfile(),
 		MaxRounds:        1,
 		TargetSurfaceIDs: []string{"candidate#instruction"},
 		BackwardOptions: promptiterengine.BackwardOptions{

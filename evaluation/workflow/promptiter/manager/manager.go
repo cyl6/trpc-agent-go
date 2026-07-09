@@ -19,9 +19,9 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
-	iprofile "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/profile"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/store"
 )
 
@@ -265,8 +265,10 @@ func validateRunRequest(request *engine.RunRequest) error {
 	switch {
 	case request.MaxRounds <= 0:
 		return errors.New("max rounds must be greater than 0")
-	case request.TargetSurfaceIDs != nil && len(request.TargetSurfaceIDs) == 0:
+	case len(request.TargetSurfaceIDs) == 0:
 		return errors.New("target surface ids must not be empty")
+	case slices.Contains(request.TargetSurfaceIDs, ""):
+		return errors.New("target surface ids must not contain empty values")
 	case request.BackwardOptions.CaseParallelism < 0:
 		return errors.New("backward case parallelism must be non-negative")
 	case request.AggregationOptions.SurfaceParallelism < 0:
@@ -285,7 +287,7 @@ func cloneRunRequest(request *engine.RunRequest) *engine.RunRequest {
 	cloned := *request
 	cloned.Train = cloneEvalSetInputs(request.Train)
 	cloned.Validation = cloneEvalSetInputs(request.Validation)
-	cloned.InitialProfile = iprofile.Clone(request.InitialProfile)
+	cloned.InitialProfile = cloneProfile(request.InitialProfile)
 	cloned.TargetSurfaceIDs = append([]string(nil), request.TargetSurfaceIDs...)
 	cloned.AcceptancePolicy.CriticalCaseIDs = append([]string(nil), request.AcceptancePolicy.CriticalCaseIDs...)
 	if request.AcceptancePolicy.BudgetConstraint != nil {
@@ -297,6 +299,50 @@ func cloneRunRequest(request *engine.RunRequest) *engine.RunRequest {
 		cloned.StopPolicy.TargetScore = &targetScore
 	}
 	return &cloned
+}
+
+func cloneEvalSetInputs(inputs []engine.EvalSetInput) []engine.EvalSetInput {
+	cloned := append([]engine.EvalSetInput(nil), inputs...)
+	for i := range cloned {
+		cloned[i].EvalCaseIDs = append([]string(nil), inputs[i].EvalCaseIDs...)
+		cloned[i].LossHints = append([]engine.LossHint(nil), inputs[i].LossHints...)
+	}
+	return cloned
+}
+
+func cloneProfile(profile *promptiter.Profile) *promptiter.Profile {
+	if profile == nil {
+		return nil
+	}
+	cloned := *profile
+	cloned.Overrides = append([]promptiter.SurfaceOverride(nil), profile.Overrides...)
+	for i := range cloned.Overrides {
+		cloned.Overrides[i].Value = cloneSurfaceValue(profile.Overrides[i].Value)
+	}
+	return &cloned
+}
+
+func cloneSurfaceValue(value astructure.SurfaceValue) astructure.SurfaceValue {
+	cloned := value
+	if value.Text != nil {
+		text := *value.Text
+		cloned.Text = &text
+	}
+	cloned.FewShot = append([]astructure.FewShotExample(nil), value.FewShot...)
+	for i := range cloned.FewShot {
+		cloned.FewShot[i].Messages = append([]astructure.FewShotMessage(nil), value.FewShot[i].Messages...)
+	}
+	cloned.Tools = append([]astructure.ToolRef(nil), value.Tools...)
+	cloned.Skills = append([]astructure.SkillRef(nil), value.Skills...)
+	if value.Model != nil {
+		model := *value.Model
+		cloned.Model = &model
+	}
+	if value.PromptSyntax != nil {
+		promptSyntax := *value.PromptSyntax
+		cloned.PromptSyntax = &promptSyntax
+	}
+	return cloned
 }
 
 func validateEvalSetInputs(role string, inputs []engine.EvalSetInput) error {
@@ -371,19 +417,4 @@ func isValidLossHintSeverity(severity promptiter.LossSeverity) bool {
 	default:
 		return false
 	}
-}
-
-func cloneEvalSetInputs(inputs []engine.EvalSetInput) []engine.EvalSetInput {
-	if inputs == nil {
-		return nil
-	}
-	cloned := make([]engine.EvalSetInput, 0, len(inputs))
-	for _, input := range inputs {
-		cloned = append(cloned, engine.EvalSetInput{
-			EvalSetID:   input.EvalSetID,
-			EvalCaseIDs: append([]string(nil), input.EvalCaseIDs...),
-			LossHints:   append([]engine.LossHint(nil), input.LossHints...),
-		})
-	}
-	return cloned
 }
